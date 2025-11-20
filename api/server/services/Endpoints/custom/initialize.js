@@ -16,7 +16,9 @@ const {
 const { getUserKeyValues, checkUserKeyExpiry } = require('~/server/services/UserService');
 const { fetchModels } = require('~/server/services/ModelService');
 const OpenAIClient = require('~/app/clients/OpenAIClient');
+const RAGChatClient = require('~/app/clients/RAGChatClient');
 const getLogStores = require('~/cache/getLogStores');
+const { logger } = require('~/config');
 
 const { PROXY } = process.env;
 
@@ -176,7 +178,23 @@ const initializeClient = async ({ req, res, endpointOption, optionsOnly, overrid
     };
   }
 
-  const client = new OpenAIClient(apiKey, clientOptions);
+  // Check if this is a RAG endpoint and use RAGChatClient
+  let client;
+  const endpointName = endpoint?.toLowerCase() || '';
+
+  if (endpointName === 'ragchat' || endpointName.includes('rag')) {
+    // Use RAGChatClient for polling-based RAG service
+    clientOptions.ragServerUrl = process.env.RAG_SERVER_URL || 'http://legal-search-api:8123';
+    clientOptions.pollIntervalMs = parseInt(process.env.RAG_POLL_INTERVAL_MS || '15000', 10);
+    clientOptions.maxPollAttempts = parseInt(process.env.RAG_MAX_POLL_ATTEMPTS || '25', 10);
+
+    client = new RAGChatClient(apiKey, clientOptions);
+    logger.info('[Custom Endpoint] Using RAGChatClient for polling-based RAG service');
+  } else {
+    // Default to OpenAIClient
+    client = new OpenAIClient(apiKey, clientOptions);
+  }
+
   return {
     client,
     openAIApiKey: apiKey,
