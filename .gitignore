@@ -144,3 +144,10 @@ PARALEGAL-CHANGES.md
 REDIS-MONITORING.md
 REDIS-CONFIGURATION.md
 CACHE-KEYS-REFERENCE.md
+AGENT-POLLING-SETUP.md
+ENVIRONMENT-CONFIGURATION.md
+ENVIRONMENT-VARIABLES.md
+I have a custom backend service called rag-chat-se.md
+LibreChat Polling API Integration Solution for rag-chat-server.md
+RAG-CHAT-POLLING-INTEGRATION.md
+rag-chat-server-claude.md
