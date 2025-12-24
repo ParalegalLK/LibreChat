@@ -28,6 +28,7 @@
     "upgrade": "node config/upgrade.js",
     "create-user": "node config/create-user.js",
     "invite-user": "node config/invite-user.js",
+    "bulk-invite": "node config/bulk-invite.js",
     "list-users": "node config/list-users.js",
     "reset-password": "node config/reset-password.js",
     "ban-user": "node config/ban-user.js",
