@@ -139,5 +139,8 @@ helm/**/.values.yaml
 /.codeium
 *.local.md
 
-# Accounts 
+# Accounts
 /desaram-accounts/
+
+# Personal notes
+.notes/
