@@ -1,12 +1,43 @@
-# Overall context:
+# Overall Context
 
-I run LibreChat: https://github.com/danny-avila/LibreChat as a managed service for law firms. I have my own legal deep research agent that I expose as a tool call so that lawyers can use it in conjunction with LLMs in their daily workflows. 
+I run LibreChat (https://github.com/danny-avila/LibreChat) as a managed service for law firms. I have my own legal deep research agent exposed as a tool call so lawyers can use it with LLMs in their daily workflows.
 
-# Present challenge
+# Common Commands
 
-I need to create an efficient way to setup multiple accounts at once. Currently, I run: `docker-compose exec api npm run create-user` everytime and manually setup accounts by answering the prompts that follow (email, password, etc)
+## User Management
+```bash
+# Create single user
+docker-compose exec api npm run create-user
 
-I want to be able to supply a .txt file and then their accounts ought to be created. But email has first name only. SO before creation, you have to web search the first name and the firm name (D. L. & F. De Saram Law Firm) to find their full names and fill that next to the emails.
+# Bulk invite users (from config/bulk-invite.js)
+docker-compose exec api node config/bulk-invite.js
+
+# Query users
+docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').users.find({email: /pattern/i}, {email:1, name:1})"
+
+# Check pending invite tokens
+docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').tokens.find({email: /pattern/i})"
+```
+
+## Docker Operations
+```bash
+docker-compose ps          # Check running services
+docker-compose logs -f api # Follow API logs
+docker-compose restart api # Restart API service
+```
+
+# Project Structure
+
+## Key Customizations
+- `api/server/utils/emails/` - Email templates (custom branding)
+- `config/bulk-invite.js` - Bulk user invitation script
+- `.env` - Environment config
+
+## MongoDB Collections
+- `users` - User accounts
+- `tokens` - Invite/verification tokens
+- `conversations` - Chat history
+- `messages` - Individual messages
 
 # Fork Maintenance Workflow
 
