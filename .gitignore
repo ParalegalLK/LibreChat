@@ -170,3 +170,6 @@ claude-flow
 
 # Accounts
 /desaram-accounts/
+
+# Personal notes
+.notes/
