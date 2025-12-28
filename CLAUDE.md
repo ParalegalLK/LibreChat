@@ -26,6 +26,14 @@ docker-compose logs -f api # Follow API logs
 docker-compose restart api # Restart API service
 ```
 
+## Redis Cache
+LibreChat caches config (including `librechat.yaml` settings) in Redis. After changing UI/config settings, flush the cache and restart the API:
+```bash
+docker compose exec librechat-redis redis-cli FLUSHALL
+docker compose restart api
+```
+Then hard-refresh the browser (Ctrl+Shift+R).
+
 # Project Structure
 
 ## Key Customizations
