@@ -49,26 +49,63 @@ Then hard-refresh the browser (Ctrl+Shift+R).
 
 # Fork Maintenance Workflow
 
-## Git remotes
+## Git Remotes
 - `origin` → ParalegalLK/LibreChat (my fork)
 - `upstream` → danny-avila/LibreChat (original)
 
-## Branches
-- `main` = clean mirror of upstream (never commit directly)
-- `custom-branding` = my customizations (email templates, branding)
+## Branch Structure
+```
+upstream/main → main (mirror) → dev (development) → prod (production)
+                                  ↑
+                            feature branches
+```
 
-## To sync with upstream updates
+| Branch | Purpose |
+|--------|---------|
+| `main` | Clean mirror of upstream (never commit directly) |
+| `dev` | Development - all feature PRs merge here first |
+| `prod` | Production - deploy from this branch |
+
+## Feature Development Workflow
 ```bash
+# 1. Start a new feature (branch off dev)
+git checkout dev
+git pull origin dev
+git checkout -b feature/my-feature
+
+# 2. Develop and test locally
+# ... make changes ...
+
+# 3. Push and create PR to dev
+git push origin feature/my-feature
+# Create PR: feature/my-feature → dev
+
+# 4. After testing on dev, create PR to prod
+# Create PR: dev → prod
+
+# 5. Deploy from prod
+git checkout prod
+git pull origin prod
+# Deploy to production server
+```
+
+## Syncing Upstream Updates
+```bash
+# 1. Update main from upstream
 git fetch upstream
 git checkout main
 git merge upstream/main
 git push origin main
-git checkout custom-branding
-git rebase main
-git push origin custom-branding --force-with-lease
+
+# 2. Merge upstream changes into dev
+git checkout dev
+git merge main
+git push origin dev
+
+# 3. Test on dev, then PR to prod when ready
 ```
 
-## Handling rebase conflicts
+## Handling Merge Conflicts
 1. Fix conflicts in files
 2. `git add <fixed-files>`
-3. `git rebase --continue`
+3. `git commit` (or `git merge --continue`)
