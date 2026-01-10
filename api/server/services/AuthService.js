@@ -92,7 +92,7 @@ const sendVerificationEmail = async (user) => {
   }/verify?token=${verifyToken}&email=${encodeURIComponent(user.email)}`;
   await sendEmail({
     email: user.email,
-    subject: 'Verify your email',
+    subject: 'Verify your email - Expires in 1 Hr',
     payload: {
       appName: process.env.APP_TITLE || 'LibreChat',
       name: user.name || user.username || user.email,
@@ -107,7 +107,7 @@ const sendVerificationEmail = async (user) => {
     email: user.email,
     token: hash,
     createdAt: Date.now(),
-    expiresIn: 900,
+    expiresIn: 3600,
   });
 
   logger.info(`[sendVerificationEmail] Verification link issued. [Email: ${user.email}]`);
@@ -523,7 +523,7 @@ const resendVerificationEmail = async (req) => {
 
     await sendEmail({
       email: user.email,
-      subject: 'Verify your email',
+      subject: 'Verify your email - Expires in 1 Hr',
       payload: {
         appName: process.env.APP_TITLE || 'LibreChat',
         name: user.name || user.username || user.email,
@@ -538,7 +538,7 @@ const resendVerificationEmail = async (req) => {
       email: user.email,
       token: hash,
       createdAt: Date.now(),
-      expiresIn: 900,
+      expiresIn: 3600,
     });
 
     logger.info(`[resendVerificationEmail] Verification link issued. [Email: ${user.email}]`);
