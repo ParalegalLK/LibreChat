@@ -225,3 +225,25 @@ git push origin dev
 1. Fix conflicts in files
 2. `git add <fixed-files>`
 3. `git commit` (or `git merge --continue`)
+
+## Fixing package-lock.json Conflicts in PRs
+
+When a PR fails CI with `npm ci` errors like "Missing: package@version from lock file", it means `package-lock.json` is out of sync. This happens because CI merges the target branch into your feature branch, causing lock file conflicts.
+
+**Solution:** Merge the target branch locally, regenerate the lock file, and push:
+```bash
+# 1. Merge target branch (e.g., dev) into your feature branch
+git checkout feature/my-feature
+git merge dev
+
+# 2. If package-lock.json has conflicts, regenerate it
+git checkout --ours package-lock.json
+npm install
+
+# 3. Commit and push
+git add package-lock.json
+git commit -m "Merge dev and regenerate package-lock.json"
+git push origin feature/my-feature
+```
+
+This ensures CI gets the already-merged state with no conflicts.
