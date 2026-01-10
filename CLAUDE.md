@@ -26,6 +26,23 @@ docker-compose logs -f api # Follow API logs
 docker-compose restart api # Restart API service
 ```
 
+## Docker Builds (Free Memory First)
+Docker builds can crash on low-memory systems. Run the cleanup script before building:
+```bash
+# Cleanup and show status (stops containers, clears caches, frees memory)
+./scripts/pre-build-cleanup.sh
+
+# Or cleanup and build in one go
+./scripts/pre-build-cleanup.sh --build
+```
+
+The script does:
+1. Stops all Docker containers
+2. Prunes Docker (containers, images, build cache)
+3. Clears Linux page cache (sudo)
+4. Restarts swap (sudo)
+5. Shows memory/disk status
+
 ## Redis Cache
 LibreChat caches config (including `librechat.yaml` settings) in Redis. After changing UI/config settings, flush the cache and restart the API:
 ```bash
@@ -33,6 +50,105 @@ docker compose exec librechat-redis redis-cli FLUSHALL
 docker compose restart api
 ```
 Then hard-refresh the browser (Ctrl+Shift+R).
+
+## Adding a New OpenAI Model
+
+To add a new OpenAI model (e.g., GPT-5.1), update two files:
+
+### Step 1: Add to `.env`
+Add the model to the `OPENAI_MODELS` list:
+```bash
+OPENAI_MODELS=gpt-4.1,gpt-5.1
+```
+
+### Step 2: Add to `librechat.yaml` (recommended)
+Add a modelSpec entry to configure token limits and display settings:
+```yaml
+modelSpecs:
+  list:
+    - name: "gpt-5.1"
+      label: "GPT-5.1"
+      description: "OpenAI's GPT-5.1 model"
+      preset:
+        endpoint: "openAI"
+        model: "gpt-5.1"
+        maxContextTokens: 400000    # Check OpenAI docs for actual limit
+        max_tokens: 128000          # Check OpenAI docs for actual limit
+```
+
+### Step 3: Apply changes
+```bash
+docker compose exec librechat-redis redis-cli FLUSHALL
+docker compose restart api
+```
+Then hard-refresh the browser (Ctrl+Shift+R) and start a **new conversation**.
+
+### Finding model limits
+Check OpenAI's model comparison page for token limits:
+https://platform.openai.com/docs/models/compare
+
+### Troubleshooting
+
+#### Model not showing in dropdown
+1. **Check `.env`** - Is the model in `OPENAI_MODELS`?
+   ```bash
+   grep OPENAI_MODELS .env
+   ```
+2. **Flush cache and restart**
+   ```bash
+   docker compose exec librechat-redis redis-cli FLUSHALL
+   docker compose restart api
+   ```
+3. **Hard refresh browser** (Ctrl+Shift+R)
+4. **Check you're on the right endpoint** - Select "OpenAI" not "Agents"
+
+#### Model shows but wrong one is used
+1. **Start a NEW conversation** - Old conversations lock to their original model
+2. **Check conversation model in database:**
+   ```bash
+   docker compose exec mongodb mongosh --quiet --eval \
+     "db.getSiblingDB('LibreChat').conversations.find({}, {endpoint:1, model:1}).sort({updatedAt:-1}).limit(5).toArray()"
+   ```
+
+#### "max_tokens is too large" error
+This means wrong model is being sent to OpenAI. Check:
+1. **Verify model in conversation:**
+   ```bash
+   docker compose exec mongodb mongosh --quiet --eval \
+     "db.getSiblingDB('LibreChat').conversations.findOne({conversationId: 'YOUR_CONVO_ID'}, {model:1, endpoint:1})"
+   ```
+2. If it shows old model, **start a new conversation**
+
+#### Check what config API loaded
+```bash
+docker compose logs api --tail 200 | grep -A5 "modelSpecs"
+```
+
+#### Verify Redis is cleared
+```bash
+docker compose exec librechat-redis redis-cli KEYS "*"
+```
+Should return empty or minimal keys after flush.
+
+#### Debug API requests
+Enable debug logging temporarily:
+```bash
+# In .env
+DEBUG_OPENAI=true
+```
+Then restart and check logs:
+```bash
+docker compose restart api
+docker compose logs -f api
+```
+
+#### Nuclear option - full reset
+```bash
+docker compose down
+docker compose exec librechat-redis redis-cli FLUSHALL
+docker compose up -d
+```
+Then hard refresh browser and start new conversation.
 
 # Project Structure
 

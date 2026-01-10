@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useRef, useEffect } from 'react';
+import React, { memo, useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { useToastContext } from '@librechat/client';
 import { PermissionTypes, Permissions, apiBaseUrl } from 'librechat-data-provider';
@@ -11,6 +11,10 @@ import { useCodeBlockContext } from '~/Providers';
 import { handleDoubleClick } from '~/utils';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
+
+// S3 URL pattern for paralegal S3 buckets
+const S3_URL_PATTERN = /^https:\/\/paralegal-(prod|decisions)\.s3(\.[a-z0-9-]+)?\.amazonaws\.com\//;
+const PRESIGNED_URL_API = import.meta.env.VITE_PRESIGNED_URL_API || 'https://www.dev.paralegal.lk';
 
 type TCodeProps = {
   inline?: boolean;
@@ -92,6 +96,10 @@ export const a: React.ElementType = memo(({ href, children }: TAnchorProps) => {
   const user = useRecoilValue(store.user);
   const { showToast } = useToastContext();
   const localize = useLocalize();
+  const [isLoadingPresigned, setIsLoadingPresigned] = useState(false);
+
+  // Check if this is an S3 URL that needs presigned URL handling
+  const isS3Url = useMemo(() => S3_URL_PATTERN.test(href), [href]);
 
   const {
     file_id = '',
@@ -111,8 +119,85 @@ export const a: React.ElementType = memo(({ href, children }: TAnchorProps) => {
   }, [user?.id, href]);
 
   const { refetch: downloadFile } = useFileDownload(user?.id ?? '', file_id);
+
+  // Handler for S3 URLs - fetches presigned URL and opens in new tab
+  const handleS3Click = useCallback(
+    async (event: React.MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+
+      if (isLoadingPresigned) {
+        return;
+      }
+
+      setIsLoadingPresigned(true);
+
+      // Open blank window immediately to avoid popup blockers
+      const newWindow = window.open('about:blank', '_blank');
+
+      showToast({
+        status: 'info',
+        message: 'Generating secure link...',
+      });
+
+      try {
+        const response = await fetch(`${PRESIGNED_URL_API}/api/pdf/get-pdf-url`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ link: href }),
+        });
+
+        const data = await response.json();
+
+        if (data.success && newWindow) {
+          newWindow.location.href = data.presigned_url;
+        } else {
+          console.error('Error getting presigned URL:', data.error);
+          showToast({
+            status: 'error',
+            message: 'Failed to generate secure link',
+          });
+          // Fallback to original URL
+          if (newWindow) {
+            newWindow.location.href = href;
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching presigned URL:', error);
+        showToast({
+          status: 'error',
+          message: 'Failed to generate secure link',
+        });
+        // Fallback to original URL
+        if (newWindow) {
+          newWindow.location.href = href;
+        }
+      } finally {
+        setIsLoadingPresigned(false);
+      }
+    },
+    [href, isLoadingPresigned, showToast],
+  );
+
   const props: { target?: string; onClick?: React.MouseEventHandler } = { target: '_new' };
 
+  // Handle S3 URLs with presigned URL fetching
+  if (isS3Url) {
+    return (
+      <a
+        href={href}
+        onClick={handleS3Click}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ cursor: isLoadingPresigned ? 'wait' : 'pointer' }}
+      >
+        {children}
+      </a>
+    );
+  }
+
+  // Handle regular links (non-file, non-S3)
   if (!file_id || !filename) {
     return (
       <a href={href} {...props}>
@@ -121,6 +206,7 @@ export const a: React.ElementType = memo(({ href, children }: TAnchorProps) => {
     );
   }
 
+  // Handle file download links
   const handleDownload = async (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     try {
