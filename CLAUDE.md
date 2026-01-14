@@ -5,18 +5,23 @@ I run LibreChat (https://github.com/danny-avila/LibreChat) as a managed service 
 # Common Commands
 
 ## User Management
+**Note:** Always use `-T` flag with `docker compose exec` to avoid "input device is not a TTY" errors.
+
 ```bash
-# Create single user
+# Create single user (interactive - run manually in terminal)
 docker-compose exec api npm run create-user
 
 # Bulk invite users (from config/bulk-invite.js)
-docker-compose exec api node config/bulk-invite.js
+docker compose exec -T api node config/bulk-invite.js /app/config/my-invite.txt /app/config/results.csv
+
+# Send password reset email
+docker compose exec -T api node config/send-password-reset.js user@example.com
 
 # Query users
-docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').users.find({email: /pattern/i}, {email:1, name:1})"
+docker compose exec -T mongodb mongosh --eval "db.getSiblingDB('LibreChat').users.find({email: /pattern/i}, {email:1, name:1})"
 
 # Check pending invite tokens
-docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').tokens.find({email: /pattern/i})"
+docker compose exec -T mongodb mongosh --eval "db.getSiblingDB('LibreChat').tokens.find({email: /pattern/i})"
 ```
 
 ## Docker Operations
@@ -155,6 +160,7 @@ Then hard refresh browser and start new conversation.
 ## Key Customizations
 - `api/server/utils/emails/` - Email templates (custom branding)
 - `config/bulk-invite.js` - Bulk user invitation script
+- `config/send-password-reset.js` - Send password reset email to user
 - `.env` - Environment config
 
 ## MongoDB Collections
