@@ -21,6 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Normalize image owner (lowercase for GHCR)
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -46,7 +49,7 @@ jobs:
           target: node
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ github.repository_owner }}/librechat-desaram-ai-prod:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/librechat-desaram-ai-prod:latest
+            ghcr.io/${{ env.OWNER_LC }}/librechat-desaram-ai-prod:${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/librechat-desaram-ai-prod:latest
           cache-from: type=gha,scope=desaram-ai-prod
           cache-to: type=gha,mode=max,scope=desaram-ai-prod
