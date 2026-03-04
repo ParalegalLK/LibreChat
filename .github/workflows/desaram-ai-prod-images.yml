@@ -8,6 +8,8 @@ on:
     paths:
       - 'Dockerfile'
       - 'docker-compose.yml'
+      - 'package.json'
+      - 'package-lock.json'
       - 'api/**'
       - 'client/**'
       - 'packages/**'
