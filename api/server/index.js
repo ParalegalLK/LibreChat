@@ -41,6 +41,11 @@ const { PORT, HOST, ALLOW_SOCIAL_LOGIN, DISABLE_COMPRESSION, TRUST_PROXY } = pro
 const port = isNaN(Number(PORT)) ? 3080 : Number(PORT);
 const host = HOST || 'localhost';
 const trusted_proxy = Number(TRUST_PROXY) || 1; /* trust first proxy by default */
+const configuredAppTitle = process.env.APP_TITLE?.trim() ?? '';
+const effectiveAppTitle =
+  configuredAppTitle !== '' && configuredAppTitle !== 'LibreChat'
+    ? configuredAppTitle
+    : 'desaram.ai';
 
 const app = express();
 
@@ -66,6 +71,13 @@ const startServer = async () => {
 
   const indexPath = path.join(appConfig.paths.dist, 'index.html');
   let indexHTML = fs.readFileSync(indexPath, 'utf8');
+  const safeAppTitle = effectiveAppTitle
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  indexHTML = indexHTML.replace(/<title>[\s\S]*?<\/title>/i, `<title>${safeAppTitle}</title>`);
 
   // In order to provide support to serving the application in a sub-directory
   // We need to update the base href if the DOMAIN_CLIENT is specified and not the root path

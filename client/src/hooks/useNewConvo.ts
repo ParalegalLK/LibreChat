@@ -237,10 +237,10 @@ const useNewConvo = (index = 0) => {
         const getParams = () => (searchParamsString ? `?${searchParamsString}` : '');
 
         if (conversation.conversationId === Constants.NEW_CONVO && !modelsData) {
-          const appTitle = localStorage.getItem(LocalStorageKeys.APP_TITLE) ?? '';
-          if (appTitle) {
-            document.title = appTitle;
-          }
+          const cachedTitle = localStorage.getItem(LocalStorageKeys.APP_TITLE) ?? '';
+          const appTitle =
+            cachedTitle !== '' && cachedTitle !== 'LibreChat' ? cachedTitle : 'desaram.ai';
+          document.title = appTitle;
           const path = `/c/${Constants.NEW_CONVO}${getParams()}`;
           navigate(path, { state: { focusChat: true } });
           return;

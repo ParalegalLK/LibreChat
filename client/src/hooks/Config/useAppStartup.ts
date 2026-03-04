@@ -31,10 +31,9 @@ export default function useAppStartup({
 
   /** Set the app title */
   useEffect(() => {
-    const appTitle = startupConfig?.appTitle ?? '';
-    if (!appTitle) {
-      return;
-    }
+    const configuredTitle = startupConfig?.appTitle ?? '';
+    const appTitle =
+      configuredTitle !== '' && configuredTitle !== 'LibreChat' ? configuredTitle : 'desaram.ai';
     document.title = appTitle;
     localStorage.setItem(LocalStorageKeys.APP_TITLE, appTitle);
   }, [startupConfig]);

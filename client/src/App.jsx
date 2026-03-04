@@ -41,6 +41,35 @@ const App = () => {
     initializeFontSize();
   }, []);
 
+  useEffect(() => {
+    const fallbackTitle = 'desaram.ai';
+    const normalizeTitle = () => {
+      if (document.title.trim().toLowerCase() === 'librechat') {
+        document.title = fallbackTitle;
+      }
+    };
+
+    normalizeTitle();
+    const titleElement = document.querySelector('title');
+    if (titleElement == null) {
+      return;
+    }
+
+    const observer = new MutationObserver(() => {
+      normalizeTitle();
+    });
+
+    observer.observe(titleElement, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   // Load theme from environment variables if available
   const envTheme = getThemeFromEnv();
 

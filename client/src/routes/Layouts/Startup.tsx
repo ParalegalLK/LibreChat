@@ -44,7 +44,11 @@ export default function StartupLayout({ isAuthenticated }: { isAuthenticated?: b
   }, [isAuthenticated, navigate, data]);
 
   useEffect(() => {
-    document.title = startupConfig?.appTitle || 'LibreChat';
+    const configuredTitle = startupConfig?.appTitle;
+    document.title =
+      configuredTitle != null && configuredTitle !== '' && configuredTitle !== 'LibreChat'
+        ? configuredTitle
+        : 'desaram.ai';
   }, [startupConfig?.appTitle]);
 
   useEffect(() => {

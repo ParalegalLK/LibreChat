@@ -22,6 +22,11 @@ const publicSharedLinksEnabled =
 
 const sharePointFilePickerEnabled = isEnabled(process.env.ENABLE_SHAREPOINT_FILEPICKER);
 const openidReuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS);
+const configuredAppTitle = process.env.APP_TITLE?.trim() ?? '';
+const defaultAppTitle =
+  configuredAppTitle !== '' && configuredAppTitle !== 'LibreChat'
+    ? configuredAppTitle
+    : 'desaram.ai';
 
 router.get('/', async function (req, res) {
   const cache = getLogStores(CacheKeys.CONFIG_STORE);
@@ -60,7 +65,7 @@ router.get('/', async function (req, res) {
 
     /** @type {TStartupConfig} */
     const payload = {
-      appTitle: process.env.APP_TITLE || 'LibreChat',
+      appTitle: defaultAppTitle,
       socialLogins: appConfig?.registration?.socialLogins ?? defaultSocialLogins,
       discordLoginEnabled: !!process.env.DISCORD_CLIENT_ID && !!process.env.DISCORD_CLIENT_SECRET,
       facebookLoginEnabled:
