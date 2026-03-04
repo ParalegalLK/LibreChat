@@ -115,3 +115,37 @@ Expected:
 
 - `LibreChat` in meta description does not affect tab title.
 - Hard refresh/private window recommended when validating to avoid stale cached assets.
+
+## Deploy Checklist (Do Not Lose the Fix)
+
+1. Push the commits containing the fix:
+
+```bash
+git checkout dev
+git push origin dev
+```
+
+2. On the deployment host, pull the same branch/commits:
+
+```bash
+git checkout dev
+git pull origin dev
+```
+
+3. Build and run `api` from local source (not upstream prebuilt image):
+
+```bash
+docker compose up -d --build api
+```
+
+4. Clear Redis config cache and restart `api`:
+
+```bash
+docker compose exec librechat-redis redis-cli FLUSHALL
+docker compose restart api
+```
+
+5. Browser validation:
+   - Hard refresh (`Ctrl+Shift+R`) or open a private window.
+   - Start a new conversation.
+   - Confirm tab title stays `desaram.ai` (no `LibreChat` flash).
