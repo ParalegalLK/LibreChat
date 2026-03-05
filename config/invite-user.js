@@ -61,7 +61,7 @@ const connect = require('./connect');
   try {
     await sendEmail({
       email: email,
-      subject: `You're invited to desaram.ai`,
+      subject: `You're invited to desaram.ai - expires in 7 days`,
       payload: {
         appName: appName,
         inviteLink: inviteLink,
