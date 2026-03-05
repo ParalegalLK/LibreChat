@@ -13,7 +13,13 @@ const backendURL = process.env.HOST
   ? `http://${process.env.HOST}:${backendPort}`
   : `http://localhost:${backendPort}`;
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command }) => {
+  // Toggle to disable PWA/service worker generation when needed for safe rollouts.
+  // Accepts either DISABLE_PWA=true or VITE_DISABLE_PWA=true.
+  const pwaDisabled =
+    process.env.DISABLE_PWA === 'true' || process.env.VITE_DISABLE_PWA === 'true';
+
+  return {
   base: '',
   server: {
     allowedHosts:
@@ -38,64 +44,69 @@ export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     nodePolyfills(),
-    VitePWA({
-      injectRegister: 'auto', // 'auto' | 'manual' | 'disabled'
-      registerType: 'autoUpdate', // 'prompt' | 'autoUpdate'
-      devOptions: {
-        enabled: false, // disable service worker registration in development mode
-      },
-      useCredentials: true,
-      includeManifestIcons: false,
-      workbox: {
-        globPatterns: [
-          '**/*.{js,css,html}',
-          'assets/favicon*.png',
-          'assets/icon-*.png',
-          'assets/apple-touch-icon*.png',
-          'assets/maskable-icon.png',
-          'manifest.webmanifest',
-        ],
-        globIgnores: ['images/**/*', '**/*.map', 'index.html'],
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
-        navigateFallbackDenylist: [/^\/oauth/, /^\/api/],
-      },
-      includeAssets: [],
-      manifest: {
-        name: 'desaram.ai',
-        short_name: 'desaram.ai',
-        display: 'standalone',
-        background_color: '#000000',
-        theme_color: '#009688',
-        icons: [
-          {
-            src: 'assets/favicon-32x32.png',
-            sizes: '32x32',
-            type: 'image/png',
-          },
-          {
-            src: 'assets/favicon-16x16.png',
-            sizes: '16x16',
-            type: 'image/png',
-          },
-          {
-            src: 'assets/apple-touch-icon-180x180.png',
-            sizes: '180x180',
-            type: 'image/png',
-          },
-          {
-            src: 'assets/icon-192x192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: 'assets/maskable-icon.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable',
-          },
-        ],
-      },
-    }),
+    ...(!pwaDisabled
+      ? [
+          VitePWA({
+            injectRegister: 'auto', // 'auto' | 'manual' | 'disabled'
+            registerType: 'autoUpdate', // 'prompt' | 'autoUpdate'
+            devOptions: {
+              enabled: false, // disable service worker registration in development mode
+            },
+            useCredentials: true,
+            includeManifestIcons: false,
+            workbox: {
+              globPatterns: [
+                '**/*.{js,css,html}',
+                'assets/favicon*.png',
+                'assets/icon-*.png',
+                'assets/apple-touch-icon*.png',
+                'assets/maskable-icon.png',
+                'manifest.webmanifest',
+              ],
+              // Keep index.html in precache since Workbox navigation fallback uses it.
+              globIgnores: ['images/**/*', '**/*.map'],
+              maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+              navigateFallbackDenylist: [/^\/oauth/, /^\/api/],
+            },
+            includeAssets: [],
+            manifest: {
+              name: 'desaram.ai',
+              short_name: 'desaram.ai',
+              display: 'standalone',
+              background_color: '#000000',
+              theme_color: '#009688',
+              icons: [
+                {
+                  src: 'assets/favicon-32x32.png',
+                  sizes: '32x32',
+                  type: 'image/png',
+                },
+                {
+                  src: 'assets/favicon-16x16.png',
+                  sizes: '16x16',
+                  type: 'image/png',
+                },
+                {
+                  src: 'assets/apple-touch-icon-180x180.png',
+                  sizes: '180x180',
+                  type: 'image/png',
+                },
+                {
+                  src: 'assets/icon-192x192.png',
+                  sizes: '192x192',
+                  type: 'image/png',
+                },
+                {
+                  src: 'assets/maskable-icon.png',
+                  sizes: '512x512',
+                  type: 'image/png',
+                  purpose: 'maskable',
+                },
+              ],
+            },
+          }),
+        ]
+      : []),
     sourcemapExclude({ excludeNodeModules: true }),
     compression({
       threshold: 10240,
@@ -285,7 +296,8 @@ export default defineConfig(({ command }) => ({
       'micromark-extension-math': 'micromark-extension-llm-math',
     },
   },
-}));
+  };
+});
 
 interface SourcemapExclude {
   excludeNodeModules?: boolean;
