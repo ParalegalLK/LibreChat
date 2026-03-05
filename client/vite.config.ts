@@ -20,6 +20,9 @@ export default defineConfig(({ command }) => {
     process.env.DISABLE_PWA === 'true' || process.env.VITE_DISABLE_PWA === 'true';
 
   return {
+  define: {
+    global: 'globalThis',
+  },
   base: '',
   server: {
     allowedHosts:
@@ -61,6 +64,9 @@ export default defineConfig(({ command }) => {
             useCredentials: true,
             includeManifestIcons: false,
             workbox: {
+              skipWaiting: true,
+              clientsClaim: true,
+              cleanupOutdatedCaches: true,
               globPatterns: [
                 '**/*.{js,css,html}',
                 'assets/favicon*.png',
@@ -244,12 +250,8 @@ export default defineConfig(({ command }) => {
             if (normalizedId.includes('framer-motion')) {
               return 'framer-motion';
             }
-            if (
-              normalizedId.includes('node_modules/highlight.js') ||
-              normalizedId.includes('node_modules/lowlight')
-            ) {
-              return 'markdown_highlight';
-            }
+            // Keep highlight/lowlight in default vendor graph to avoid
+            // cross-chunk CommonJS helper initialization issues.
             if (normalizedId.includes('katex') || normalizedId.includes('node_modules/katex')) {
               return 'math-katex';
             }
