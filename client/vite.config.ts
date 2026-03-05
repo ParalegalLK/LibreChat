@@ -43,7 +43,13 @@ export default defineConfig(({ command }) => {
   envPrefix: ['VITE_', 'SCRIPT_', 'DOMAIN_', 'ALLOW_'],
   plugins: [
     react(),
-    nodePolyfills(),
+    nodePolyfills({
+      globals: {
+        Buffer: true,
+        global: true,
+        process: true,
+      },
+    }),
     ...(!pwaDisabled
       ? [
           VitePWA({
@@ -116,7 +122,7 @@ export default defineConfig(({ command }) => {
   build: {
     sourcemap: process.env.NODE_ENV === 'development',
     outDir: './dist',
-    minify: 'terser',
+    minify: 'esbuild',
     rollupOptions: {
       preserveEntrySignatures: 'strict',
       output: {
