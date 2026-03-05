@@ -37,7 +37,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_DESARAM_AI_PROD }}
 
       - name: Prepare environment
         run: cp .env.example .env
