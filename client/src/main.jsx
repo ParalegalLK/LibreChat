@@ -1,4 +1,5 @@
 import 'regenerator-runtime/runtime';
+import './polyfills/runtime-globals';
 import { createRoot } from 'react-dom/client';
 import './locales/i18n';
 import App from './App';
