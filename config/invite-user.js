@@ -61,7 +61,7 @@ const connect = require('./connect');
   try {
     await sendEmail({
       email: email,
-      subject: `Invite to join ${appName}!`,
+      subject: `You're invited to desaram.ai`,
       payload: {
         appName: appName,
         inviteLink: inviteLink,

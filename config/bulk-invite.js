@@ -89,7 +89,7 @@ function checkEmailConfig() {
         try {
           await sendEmail({
             email: email,
-            subject: `You're Invited to Join chat.paralegal.lk`,
+            subject: `You're invited to desaram.ai`,
             payload: {
               appName: appName,
               inviteLink: inviteLink,
