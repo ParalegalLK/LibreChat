@@ -181,6 +181,18 @@ const startServer = async () => {
 
   /** SPA fallback - serve index.html for all unmatched routes */
   app.use((req, res) => {
+    // Never serve index.html for missing static asset requests.
+    // Returning HTML for JS/CSS/image URLs causes hard-to-debug client runtime failures.
+    const isAssetLikeRequest =
+      req.path.startsWith('/assets/') ||
+      req.path.startsWith('/images/') ||
+      req.path.startsWith('/fonts/') ||
+      /\.[a-zA-Z0-9]+$/.test(req.path);
+
+    if (isAssetLikeRequest) {
+      return res.status(404).type('text/plain').send('Not Found');
+    }
+
     res.set({
       'Cache-Control': process.env.INDEX_CACHE_CONTROL || 'no-cache, no-store, must-revalidate',
       Pragma: process.env.INDEX_PRAGMA || 'no-cache',
