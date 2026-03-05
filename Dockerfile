@@ -15,6 +15,7 @@ RUN uv --version
 
 # Set configurable max-old-space-size with default
 ARG NODE_MAX_OLD_SPACE_SIZE=6144
+ARG DISABLE_PWA=false
 
 RUN mkdir -p /app && chown node:node /app
 WORKDIR /app
@@ -42,7 +43,7 @@ COPY --chown=node:node . .
 
 RUN \
     # React client build with configurable memory
-    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend; \
+    DISABLE_PWA="${DISABLE_PWA}" NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend; \
     npm prune --production; \
     npm cache clean --force
 
