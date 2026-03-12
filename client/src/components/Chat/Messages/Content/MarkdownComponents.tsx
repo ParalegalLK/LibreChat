@@ -139,7 +139,6 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
 
       setIsLoadingPresigned(true);
 
-      // Open blank window immediately to avoid popup blockers
       const newWindow = window.open('about:blank', '_blank');
 
       showToast({
@@ -166,7 +165,6 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
             status: 'error',
             message: 'Failed to generate secure link',
           });
-          // Fallback to original URL
           if (newWindow) {
             newWindow.location.href = href;
           }
@@ -177,7 +175,6 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
           status: 'error',
           message: 'Failed to generate secure link',
         });
-        // Fallback to original URL
         if (newWindow) {
           newWindow.location.href = href;
         }
