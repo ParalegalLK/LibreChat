@@ -1,11 +1,32 @@
 import react from '@vitejs/plugin-react';
-// @ts-ignore
 import path from 'path';
-import type { Plugin } from 'vite';
 import { defineConfig } from 'vite';
+import { createRequire } from 'module';
+import { VitePWA } from 'vite-plugin-pwa';
 import { compression } from 'vite-plugin-compression2';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
-import { VitePWA } from 'vite-plugin-pwa';
+import type { Plugin } from 'vite';
+
+const require = createRequire(import.meta.url);
+
+/**
+ * vite-plugin-node-polyfills uses @rollup/plugin-inject to replace bare globals (e.g. `process`)
+ * with imports like `import process from 'vite-plugin-node-polyfills/shims/process'`. When the
+ * consuming module (e.g. recoil) is hoisted to the monorepo root, Vite 7's ESM resolver walks up
+ * from there and never finds the shims (installed only in client/node_modules). This map resolves
+ * the shim specifiers to absolute paths via CJS require.resolve anchored to the client directory.
+ */
+const NODE_POLYFILL_SHIMS: Record<string, string> = {
+  'vite-plugin-node-polyfills/shims/process': require.resolve(
+    'vite-plugin-node-polyfills/shims/process',
+  ),
+  'vite-plugin-node-polyfills/shims/buffer': require.resolve(
+    'vite-plugin-node-polyfills/shims/buffer',
+  ),
+  'vite-plugin-node-polyfills/shims/global': require.resolve(
+    'vite-plugin-node-polyfills/shims/global',
+  ),
+};
 
 // https://vitejs.dev/config/
 const backendPort = (process.env.BACKEND_PORT && Number(process.env.BACKEND_PORT)) || 3080;
@@ -13,13 +34,7 @@ const backendURL = process.env.HOST
   ? `http://${process.env.HOST}:${backendPort}`
   : `http://localhost:${backendPort}`;
 
-export default defineConfig(({ command }) => {
-  // Toggle to disable PWA/service worker generation when needed for safe rollouts.
-  // Accepts either DISABLE_PWA=true or VITE_DISABLE_PWA=true.
-  const pwaDisabled =
-    process.env.DISABLE_PWA === 'true' || process.env.VITE_DISABLE_PWA === 'true';
-
-  return {
+export default defineConfig(({ command }) => ({
   define: {
     global: 'globalThis',
   },
@@ -46,6 +61,12 @@ export default defineConfig(({ command }) => {
   envPrefix: ['VITE_', 'SCRIPT_', 'DOMAIN_', 'ALLOW_'],
   plugins: [
     react(),
+    {
+      name: 'node-polyfills-shims-resolver',
+      resolveId(id) {
+        return NODE_POLYFILL_SHIMS[id] ?? null;
+      },
+    },
     nodePolyfills({
       globals: {
         Buffer: true,
@@ -53,8 +74,9 @@ export default defineConfig(({ command }) => {
         process: true,
       },
     }),
-    ...(!pwaDisabled
-      ? [
+    ...((process.env.DISABLE_PWA === 'true' || process.env.VITE_DISABLE_PWA === 'true')
+      ? []
+      : [
           VitePWA({
             injectRegister: 'auto', // 'auto' | 'manual' | 'disabled'
             registerType: 'autoUpdate', // 'prompt' | 'autoUpdate'
@@ -117,8 +139,7 @@ export default defineConfig(({ command }) => {
               ],
             },
           }),
-        ]
-      : []),
+        ]),
     sourcemapExclude({ excludeNodeModules: true }),
     compression({
       threshold: 10240,
@@ -250,8 +271,12 @@ export default defineConfig(({ command }) => {
             if (normalizedId.includes('framer-motion')) {
               return 'framer-motion';
             }
-            // Keep highlight/lowlight in default vendor graph to avoid
-            // cross-chunk CommonJS helper initialization issues.
+            if (
+              normalizedId.includes('node_modules/highlight.js') ||
+              normalizedId.includes('node_modules/lowlight')
+            ) {
+              return 'markdown_highlight';
+            }
             if (normalizedId.includes('katex') || normalizedId.includes('node_modules/katex')) {
               return 'math-katex';
             }
@@ -263,6 +288,10 @@ export default defineConfig(({ command }) => {
             }
             if (normalizedId.includes('@headlessui')) {
               return 'headlessui';
+            }
+
+            if (normalizedId.includes('@icons-pack/react-simple-icons/icons/')) {
+              return;
             }
 
             // Everything else falls into a generic vendor chunk.
@@ -304,8 +333,7 @@ export default defineConfig(({ command }) => {
       'micromark-extension-math': 'micromark-extension-llm-math',
     },
   },
-  };
-});
+}));
 
 interface SourcemapExclude {
   excludeNodeModules?: boolean;
