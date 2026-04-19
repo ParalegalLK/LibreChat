@@ -2,22 +2,45 @@
 
 I run LibreChat (https://github.com/danny-avila/LibreChat) as a managed service for law firms. I have my own legal deep research agent exposed as a tool call so lawyers can use it with LLMs in their daily workflows.
 
+# Permission / Elevation Defaults
+- Default to elevated permissions for operational read commands that require Docker socket or host access (for example `docker compose ps`, `docker compose logs`, `docker compose exec -T ... mongosh --eval`, Redis reads, and similar diagnostics).
+- Do not repeatedly ask for permission for the same safe read-only command pattern once approved; reuse stored prefix approvals.
+- Keep explicit approval for destructive or state-changing actions (for example deletes, resets, pruning, writes outside workspace, schema/data mutation, container/image removal).
+
 # Common Commands
 
 ## User Management
+**Note:** Always use `-T` flag with `docker compose exec` to avoid "input device is not a TTY" errors.
+**Note:** For `mongosh --eval` commands wrapped in double quotes, always escape Mongo `$` operators as `\$` (for example `\$regex`, `\$in`, `\$or`) so Bash does not remove them before `mongosh` runs.
+
 ```bash
-# Create single user
+# Create single user (interactive - run manually in terminal)
 docker-compose exec api npm run create-user
 
 # Bulk invite users (from config/bulk-invite.js)
-docker-compose exec api node config/bulk-invite.js
+docker compose exec -T api node config/bulk-invite.js /app/config/my-invite.txt /app/config/results.csv
+
+# Send password reset email
+docker compose exec -T api node config/send-password-reset.js user@example.com
 
 # Query users
-docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').users.find({email: /pattern/i}, {email:1, name:1})"
+docker compose exec -T mongodb mongosh --eval "db.getSiblingDB('LibreChat').users.find({email: /pattern/i}, {email:1, name:1})"
 
 # Check pending invite tokens
-docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').tokens.find({email: /pattern/i})"
+docker compose exec -T mongodb mongosh --eval "db.getSiblingDB('LibreChat').tokens.find({email: /pattern/i})"
+
+# Search chat history - "Who asked about X?"
+# Step 1: Find messages matching the search term
+docker compose exec -T mongodb mongosh --quiet --eval "db.getSiblingDB('LibreChat').messages.find({text: /SEARCH_TERM/i, isCreatedByUser: true}, {text:1, user:1, createdAt:1}).sort({createdAt:-1}).limit(10)"
+
+# Step 2: Look up user by ID from results
+docker compose exec -T mongodb mongosh --quiet --eval "db.getSiblingDB('LibreChat').users.findOne({_id: ObjectId('USER_ID')}, {name:1, email:1})"
+
+# Domain count example (escaped $ operators)
+docker compose exec -T mongodb mongosh --quiet --eval "db.getSiblingDB('LibreChat').users.countDocuments({email:{\$regex:/@desaram\.com$/i}})"
 ```
+
+**Note:** When I ask "who asked about X?" or similar questions, search the MongoDB `messages` collection for that topic and look up the user. The `user` field is a string ID, so use a two-step query.
 
 ## Docker Operations
 ```bash
@@ -155,6 +178,7 @@ Then hard refresh browser and start new conversation.
 ## Key Customizations
 - `api/server/utils/emails/` - Email templates (custom branding)
 - `config/bulk-invite.js` - Bulk user invitation script
+- `config/send-password-reset.js` - Send password reset email to user
 - `.env` - Environment config
 
 ## MongoDB Collections
@@ -247,4 +271,3 @@ git push origin feature/my-feature
 ```
 
 This ensures CI gets the already-merged state with no conflicts.
-

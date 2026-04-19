@@ -2,22 +2,41 @@
 
 I run LibreChat (https://github.com/danny-avila/LibreChat) as a managed service for law firms. I have my own legal deep research agent exposed as a tool call so lawyers can use it with LLMs in their daily workflows.
 
+# Permission / Elevation Defaults
+- Default to elevated permissions for operational read commands that require Docker socket or host access (for example `docker compose ps`, `docker compose logs`, `docker compose exec -T ... mongosh --eval`, Redis reads, and similar diagnostics).
+- Do not repeatedly ask for permission for the same safe read-only command pattern once approved; reuse stored prefix approvals.
+- Keep explicit approval for destructive or state-changing actions (for example deletes, resets, pruning, writes outside workspace, schema/data mutation, container/image removal).
+
 # Common Commands
 
 ## User Management
+**Note:** Always use `-T` flag with `docker compose exec` to avoid "input device is not a TTY" errors.
+
 ```bash
-# Create single user
+# Create single user (interactive - run manually in terminal)
 docker-compose exec api npm run create-user
 
 # Bulk invite users (from config/bulk-invite.js)
-docker-compose exec api node config/bulk-invite.js
+docker compose exec -T api node config/bulk-invite.js /app/config/my-invite.txt /app/config/results.csv
+
+# Send password reset email
+docker compose exec -T api node config/send-password-reset.js user@example.com
 
 # Query users
-docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').users.find({email: /pattern/i}, {email:1, name:1})"
+docker compose exec -T mongodb mongosh --eval "db.getSiblingDB('LibreChat').users.find({email: /pattern/i}, {email:1, name:1})"
 
 # Check pending invite tokens
-docker-compose exec mongodb mongosh --eval "db.getSiblingDB('LibreChat').tokens.find({email: /pattern/i})"
+docker compose exec -T mongodb mongosh --eval "db.getSiblingDB('LibreChat').tokens.find({email: /pattern/i})"
+
+# Search chat history - "Who asked about X?"
+# Step 1: Find messages matching the search term
+docker compose exec -T mongodb mongosh --quiet --eval "db.getSiblingDB('LibreChat').messages.find({text: /SEARCH_TERM/i, isCreatedByUser: true}, {text:1, user:1, createdAt:1}).sort({createdAt:-1}).limit(10)"
+
+# Step 2: Look up user by ID from results
+docker compose exec -T mongodb mongosh --quiet --eval "db.getSiblingDB('LibreChat').users.findOne({_id: ObjectId('USER_ID')}, {name:1, email:1})"
 ```
+
+**Note:** When I ask "who asked about X?" or similar questions, search the MongoDB `messages` collection for that topic and look up the user. The `user` field is a string ID, so use a two-step query.
 
 ## Docker Operations
 ```bash
@@ -155,6 +174,7 @@ Then hard refresh browser and start new conversation.
 ## Key Customizations
 - `api/server/utils/emails/` - Email templates (custom branding)
 - `config/bulk-invite.js` - Bulk user invitation script
+- `config/send-password-reset.js` - Send password reset email to user
 - `.env` - Environment config
 
 ## MongoDB Collections
@@ -162,6 +182,34 @@ Then hard refresh browser and start new conversation.
 - `tokens` - Invite/verification tokens
 - `conversations` - Chat history
 - `messages` - Individual messages
+
+## Tracing Model Responses
+
+User messages store their text in the `text` field. Model (assistant) responses store text in the `content` array (not `text`, which is empty for model messages). Each element has `{type: "text", text: "..."}`.
+
+```bash
+# Get a full conversation (both user and model messages) by conversationId
+docker compose exec -T mongodb mongosh --quiet --eval "
+const db = db.getSiblingDB('LibreChat');
+db.messages.find({conversationId: 'CONVO_ID'}, {text:1, content:1, isCreatedByUser:1, createdAt:1}).sort({createdAt:1}).forEach(m => {
+  const role = m.isCreatedByUser ? 'USER' : 'MODEL';
+  let body = m.text;
+  if (!body && m.content && Array.isArray(m.content)) {
+    body = m.content.filter(c => c.type === 'text').map(c => c.text).join('');
+  }
+  print('=== ' + role + ' (' + m.createdAt.toISOString() + ') ===');
+  print(body || '[empty]');
+  print('');
+});
+"
+
+# Find conversations for a specific user + model on a given date
+docker compose exec -T mongodb mongosh --quiet --eval "
+const db = db.getSiblingDB('LibreChat');
+const convos = db.conversations.find({model: 'MODEL_NAME', user: 'USER_ID', updatedAt: {\$gte: new ISODate('DATE_START'), \$lt: new ISODate('DATE_END')}}, {conversationId:1}).toArray();
+printjson(convos.map(c => c.conversationId));
+"
+```
 
 # Fork Maintenance Workflow
 
@@ -247,4 +295,3 @@ git push origin feature/my-feature
 ```
 
 This ensures CI gets the already-merged state with no conflicts.
-
