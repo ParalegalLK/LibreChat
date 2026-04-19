@@ -1,0 +1,117 @@
+version: 1.3.4
+
+fileStrategy: "local"
+
+fileConfig:
+  ocr:
+    supportedMimeTypes:
+      - "^image/(jpeg|gif|png|webp|heic|heif)$"
+      - "^application/pdf$"
+      # - "^application/vnd\\.openxmlformats-officedocument\\.(wordprocessingml\\.document|presentationml\\.presentation|spreadsheetml\\.sheet)$"
+      # - "^application/vnd\\.ms-(word|powerpoint|excel)$"
+      - "^application/vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation$"
+      - "^application/vnd\\.ms-powerpoint$"
+      - "^application/epub\\+zip$"
+  endpoints:
+    openAI:
+      fileLimit: 10
+      fileSizeLimit: 50
+      supportedMimeTypes:
+        - "application/pdf"
+        - "text/.*"
+        - "application/vnd.*"
+        - "image/.*"
+    custom:
+      fileLimit: 10
+      fileSizeLimit: 50
+      supportedMimeTypes:
+        - "application/pdf"
+        - "text/.*"
+        - "application/vnd.*"
+        - "image/.*"
+    paralegal.lk:
+      disabled: true
+    De Saram AI:
+      disabled: true
+    agents:
+      fileLimit: 10
+      fileSizeLimit: 50
+      supportedMimeTypes:
+        - "application/pdf"
+        - "text/.*"
+        - "application/vnd.*"
+        - "image/.*"
+
+speech:
+  speechTab:
+    conversationMode: false
+    advancedMode: true
+    speechToText: true
+    textToSpeech: true
+  stt:
+    openai:
+      apiKey: "${STT_API_KEY}"
+      model: "whisper-1"
+  tts:
+    openai:
+      apiKey: "${TTS_API_KEY}"
+      model: "tts-1"
+      voices: ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+
+interface:
+  runCode: false
+  endpointsMenu: true
+  modelSelect: true
+
+ocr:
+  strategy: "mistral_ocr"
+  apiKey: "${MISTRAL_API_KEY}"
+  baseURL: "https://api.mistral.ai/v1"
+  mistralModel: "mistral-ocr-latest"
+
+endpoints:
+  anthropic:
+    models: ["claude-sonnet-4-5-20250929"]
+    titleConvo: true
+    titleModel: "gpt-4o-mini"
+    titleEndpoint: "openAI"
+
+  agents:
+    allowedProviders: ["openAI", "anthropic", "paralegal.lk", "dl-f-de-saram-chat"]
+    recursionLimit: 150
+    maxRecursionLimit: 200
+    capabilities:
+      - file_search
+      - web_search
+      - actions
+      - context
+      - tools
+      - chain
+      - ocr
+
+  custom:
+    - name: "paralegal.lk"
+      apiKey: "${RAG_API_KEY}"
+      baseURL: "https://www.chat.paralegal.lk/talkapi/v1"
+      models:
+        default: ["junior-silva-01"]
+        fetch: false
+      titleConvo: true
+      titleModel: "gpt-4o-mini"
+      titleEndpoint: "openAI"
+      summarize: false
+      modelDisplayLabel: "Junior Silva"
+      iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
+
+    - name: "De Saram AI"
+      apiKey: "${DLF_DE_SARAM_API_KEY}"
+      baseURL: "http://host.docker.internal:8123/v1"
+      models:
+        default: ["junior-de-saram-01"]
+        fetch: false
+      titleConvo: true
+      titleModel: "gpt-4o-mini"
+      titleEndpoint: "openAI"
+      summarize: false
+      modelDisplayLabel: "Junior De Saram"
+      iconURL: "/images/dsai-legal.jpeg"

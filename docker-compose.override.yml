@@ -1,0 +1,40 @@
+services:
+  api:
+    image: ${API_IMAGE:-ghcr.io/paralegallk/librechat-desaram-ai-prod:latest}
+    volumes:
+      - ./.env:/app/.env
+      - ./librechat.yaml:/app/librechat.yaml
+    depends_on:
+      - mongodb
+      - meilisearch
+      - rag_api
+      - librechat-redis
+
+  mongodb:
+    image: ${MONGODB_IMAGE:-mongo:8.2}
+
+  librechat-redis:
+    container_name: librechat-redis
+    image: redis:7-alpine
+    restart: always
+    user: "${UID}:${GID}"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - librechat-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  librechat-redis-data:
