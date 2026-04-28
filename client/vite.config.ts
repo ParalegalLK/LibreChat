@@ -8,6 +8,25 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import type { Plugin } from 'vite';
 
 const require = createRequire(import.meta.url);
+const DEFAULT_APP_TITLE = process.env.APP_TITLE || 'devchat.paralegal.lk';
+
+const normalizeAppTitle = (rawTitle?: string) => {
+  const title = (rawTitle ?? '').trim();
+  if (title && title.toLowerCase() !== 'librechat') {
+    return title;
+  }
+  return DEFAULT_APP_TITLE;
+};
+
+const escapeHtml = (value = '') =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const APP_TITLE = normalizeAppTitle(process.env.APP_TITLE ?? process.env.VITE_APP_TITLE);
 
 /**
  * vite-plugin-node-polyfills uses @rollup/plugin-inject to replace bare globals (e.g. `process`)
@@ -59,6 +78,12 @@ export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     {
+      name: 'app-title-injector',
+      transformIndexHtml(html) {
+        return html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeHtml(APP_TITLE)}</title>`);
+      },
+    },
+    {
       name: 'node-polyfills-shims-resolver',
       resolveId(id) {
         return NODE_POLYFILL_SHIMS[id] ?? null;
@@ -88,8 +113,8 @@ export default defineConfig(({ command }) => ({
       },
       includeAssets: [],
       manifest: {
-        name: 'LibreChat',
-        short_name: 'LibreChat',
+        name: APP_TITLE,
+        short_name: APP_TITLE,
         display: 'standalone',
         background_color: '#000000',
         theme_color: '#009688',

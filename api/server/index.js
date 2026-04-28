@@ -46,6 +46,23 @@ const host = HOST || 'localhost';
 const trusted_proxy = Number(TRUST_PROXY) || 1; /* trust first proxy by default */
 
 const app = express();
+const DEFAULT_APP_TITLE = process.env.APP_TITLE || 'chat.paralegal.lk';
+
+const normalizeAppTitle = () => {
+  const rawTitle = typeof process.env.APP_TITLE === 'string' ? process.env.APP_TITLE.trim() : '';
+  if (rawTitle && rawTitle.toLowerCase() !== 'librechat') {
+    return rawTitle;
+  }
+  return DEFAULT_APP_TITLE;
+};
+
+const escapeHtml = (value = '') =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 
 const startServer = async () => {
   if (typeof Bun !== 'undefined') {
@@ -200,6 +217,11 @@ const startServer = async () => {
     const lang = req.cookies.lang || req.headers['accept-language']?.split(',')[0] || 'en-US';
     const saneLang = lang.replace(/"/g, '&quot;');
     let updatedIndexHtml = indexHTML.replace(/lang="en-US"/g, `lang="${saneLang}"`);
+    const effectiveAppTitle = escapeHtml(normalizeAppTitle());
+    updatedIndexHtml = updatedIndexHtml.replace(
+      /<title>[\s\S]*?<\/title>/i,
+      `<title>${effectiveAppTitle}</title>`,
+    );
 
     res.type('html');
     res.send(updatedIndexHtml);

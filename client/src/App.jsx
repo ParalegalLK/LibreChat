@@ -41,6 +41,43 @@ const App = () => {
     initializeFontSize();
   }, []);
 
+  useEffect(() => {
+    const getSafeFallbackTitle = () => {
+      const currentTitle = (document.title || '').trim();
+      if (currentTitle && currentTitle.toLowerCase() !== 'librechat') {
+        return currentTitle;
+      }
+      return window.location.hostname || 'chat.paralegal.lk';
+    };
+
+    const fallbackTitle = getSafeFallbackTitle();
+    const enforceTitle = () => {
+      if ((document.title || '').trim().toLowerCase() === 'librechat') {
+        document.title = fallbackTitle;
+      }
+    };
+
+    enforceTitle();
+
+    let observer;
+    const observeTitle = () => {
+      const titleElement = document.querySelector('title');
+      if (!titleElement) {
+        requestAnimationFrame(observeTitle);
+        return;
+      }
+      observer = new MutationObserver(enforceTitle);
+      observer.observe(titleElement, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    };
+    observeTitle();
+
+    return () => observer?.disconnect();
+  }, []);
+
   // Load theme from environment variables if available
   const envTheme = getThemeFromEnv();
 
