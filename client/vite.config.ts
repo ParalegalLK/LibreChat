@@ -8,7 +8,7 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import type { Plugin } from 'vite';
 
 const require = createRequire(import.meta.url);
-const DEFAULT_APP_TITLE = process.env.APP_TITLE || 'devchat.paralegal.lk';
+const DEFAULT_APP_TITLE = process.env.APP_TITLE || 'chat.paralegal.lk';
 
 const normalizeAppTitle = (rawTitle?: string) => {
   const title = (rawTitle ?? '').trim();
@@ -113,8 +113,8 @@ export default defineConfig(({ command }) => ({
       },
       includeAssets: [],
       manifest: {
-        name: APP_TITLE,
-        short_name: APP_TITLE,
+        name: 'chat.paralegal.lk',
+        short_name: 'chat.paralegal.lk',
         display: 'standalone',
         background_color: '#000000',
         theme_color: '#009688',
