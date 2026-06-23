@@ -1,11 +1,15 @@
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 const { webcrypto } = require('node:crypto');
 require('module-alias/register');
 const moduleAlias = require('module-alias');
 
 const basePath = path.resolve(__dirname, '..', 'api');
 moduleAlias.addAlias('~', basePath);
+
+// Register Mongoose models before any ~/models methods are used (post-upgrade refactor)
+require('@librechat/data-schemas').createModels(mongoose);
 
 const connect = require('./connect');
 
@@ -15,7 +19,7 @@ const createTokenHash = () => {
   return [token, hash];
 };
 
-const sendPasswordReset = async (email) => {
+const sendPasswordReset = async (email, expiryHours = 0.25) => {
   try {
     await connect();
 
@@ -26,7 +30,8 @@ const sendPasswordReset = async (email) => {
     const DOMAIN_CLIENT = process.env.DOMAIN_CLIENT;
 
     if (!email) {
-      console.error('Usage: node send-password-reset.js <email>');
+      console.error('Usage: node send-password-reset.js <email> [expiry_hours]');
+      console.error('  expiry_hours: Token validity in hours (default: 0.25 = 15 minutes)');
       process.exit(1);
     }
 
@@ -46,11 +51,14 @@ const sendPasswordReset = async (email) => {
     // Create new reset token
     const [resetToken, hash] = createTokenHash();
 
+    const expiresIn = Math.round(expiryHours * 60 * 60); // Convert hours to seconds
+    console.log(`Token will expire in ${expiryHours} hour(s) (${expiresIn} seconds)`);
+
     await createToken({
       userId: user._id,
       token: hash,
       createdAt: Date.now(),
-      expiresIn: 900, // 15 minutes
+      expiresIn: expiresIn,
     });
 
     const link = `${DOMAIN_CLIENT}/reset-password?token=${resetToken}&userId=${user._id}`;
@@ -58,13 +66,15 @@ const sendPasswordReset = async (email) => {
     const emailEnabled = checkEmailConfig();
 
     if (emailEnabled) {
+      const expiryLabel = expiryHours >= 1 ? `${expiryHours} hrs` : `${Math.round(expiryHours * 60)} mins`;
       await sendEmail({
         email: user.email,
-        subject: 'Password Reset Request',
+        subject: `Password Reset Request (expires in ${expiryLabel})`,
         payload: {
           appName: process.env.APP_TITLE || 'LibreChat',
           name: user.name || user.username || user.email,
           link: link,
+          expiry: expiryLabel,
           year: new Date().getFullYear(),
         },
         template: 'requestPasswordReset.handlebars',
@@ -83,4 +93,5 @@ const sendPasswordReset = async (email) => {
 };
 
 const email = process.argv[2];
-sendPasswordReset(email);
+const expiryHours = process.argv[3] ? parseFloat(process.argv[3]) : 0.25;
+sendPasswordReset(email, expiryHours);
