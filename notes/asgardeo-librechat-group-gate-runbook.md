@@ -1,7 +1,7 @@
 # Asgardeo + LibreChat Group-Gated Login Runbook (Non-Enterprise)
 
-Date: 2026-04-27  
-Scope: Detailed setup and operations guide for allowing only `chat-pro-users` to log in via Asgardeo OpenID in LibreChat, without Asgardeo Conditional Authentication (enterprise feature).
+Date: 2026-05-05  
+Scope: Detailed setup and operations guide for allowing `chat-pro-users` to log in via Asgardeo OpenID in LibreChat, while also keeping local email/password login enabled, without Asgardeo Conditional Authentication (enterprise feature).
 
 ---
 
@@ -9,10 +9,11 @@ Scope: Detailed setup and operations guide for allowing only `chat-pro-users` to
 
 This runbook implements and documents:
 
-1. Asgardeo as the OpenID provider for LibreChat login.
-2. Login gate based on Asgardeo group membership (`chat-pro-users`).
-3. No dependency on Conditional Authentication templates.
-4. Clear troubleshooting for common failures:
+1. Asgardeo as the OpenID provider for LibreChat SSO login.
+2. Login gate based on Asgardeo group membership (`chat-pro-users`) for the OpenID path.
+3. Local LibreChat email/password login enabled in parallel.
+4. No dependency on Conditional Authentication templates.
+5. Clear troubleshooting for common failures:
    - `Key 'groups' not found in id token!`
    - OpenID identity mismatch (`stored openidId does not match token sub`).
 
@@ -28,9 +29,9 @@ This runbook implements and documents:
 
 ## 3. Effective Login Design
 
-### 3.1 Gate condition
+### 3.1 Gate condition (OpenID path)
 
-A user can log in only if the OpenID ID token contains:
+A user can log in through Asgardeo OpenID only if the OpenID ID token contains:
 
 - claim path: `groups`
 - required value: `chat-pro-users`
@@ -49,6 +50,14 @@ Implementation reference:
 ### 3.2 Why this works without Conditional Auth
 
 Even if Asgardeo does not hard-block before callback, LibreChat blocks at callback unless required group claim is present and matches.
+
+### 3.3 Combined login mode behavior
+
+With both local and SSO login enabled:
+
+1. OpenID users must pass `chat-pro-users` group claim check.
+2. Local email/password users authenticate against LibreChat MongoDB password hash and are not evaluated by OpenID role checks.
+3. Existing OpenID-only users usually do not have a local password and cannot use email login until a local password is created/reset.
 
 ---
 
@@ -79,10 +88,10 @@ Ensure your Asgardeo OIDC app is configured so `groups` is available in token/cl
 Use these `.env` values:
 
 ```env
-ALLOW_EMAIL_LOGIN=false
-ALLOW_REGISTRATION=false
+ALLOW_EMAIL_LOGIN=true
+ALLOW_REGISTRATION=true
 ALLOW_SOCIAL_LOGIN=true
-ALLOW_SOCIAL_REGISTRATION=false
+ALLOW_SOCIAL_REGISTRATION=true
 
 OPENID_SCOPE="openid profile email groups"
 OPENID_CALLBACK_URL=/oauth/openid/callback
@@ -92,6 +101,13 @@ OPENID_REQUIRED_ROLE_PARAMETER_PATH=groups
 
 OPENID_AUTO_REDIRECT=false
 OPENID_USE_PKCE=true
+```
+
+If local sign-up should remain closed, use this variant instead:
+
+```env
+ALLOW_REGISTRATION=false
+ALLOW_SOCIAL_REGISTRATION=false
 ```
 
 Optional UI hardening in `librechat.yaml`:
@@ -116,7 +132,9 @@ After `.env` changes:
 
 ---
 
-## 7. Login Flow for a New User
+## 7. Login Flows
+
+## 7.1 OpenID SSO flow (group-gated)
 
 With current code/config:
 
@@ -131,7 +149,12 @@ With current code/config:
 6. If no local user found, LibreChat auto-creates local user with `provider: openid`.
 7. User logs in successfully.
 
-Important: `ALLOW_SOCIAL_REGISTRATION=false` does not block this OpenID auto-provisioning path.
+## 7.2 Local email/password flow
+
+1. User submits email/password to `POST /api/auth/login`.
+2. LibreChat checks local user record and bcrypt password hash.
+3. If unverified-email login is blocked, user must be verified unless `ALLOW_UNVERIFIED_EMAIL_LOGIN=true`.
+4. OpenID `groups` claim checks are not part of this local login path.
 
 ---
 
@@ -260,4 +283,3 @@ OPENID_ADMIN_ROLE_PARAMETER_PATH=groups
 - Self Registration: https://wso2.com/asgardeo/docs/guides/account-configurations/user-onboarding/self-registration/
 - Invite User to Set Password: https://wso2.com/asgardeo/docs/guides/account-configurations/user-onboarding/invite-user-to-set-password/
 - Conditional Auth Group Template (feature context only): https://wso2.com/asgardeo/docs/guides/authentication/conditional-auth/group-based-template-access-control/
-

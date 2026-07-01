@@ -787,7 +787,7 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   const hasExecuteCode = filteredTools.includes(Tools.execute_code);
 
   if (hasWebSearch) {
-    toolContextMap[Tools.web_search] = buildWebSearchContext();
+    toolContextMap[Tools.web_search] = buildWebSearchContext(appConfig?.webSearch?.plannerPrompt);
   }
 
   if (hasExecuteCode && tool_resources) {

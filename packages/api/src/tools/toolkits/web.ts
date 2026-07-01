@@ -1,10 +1,17 @@
 import { Tools, replaceSpecialVars } from 'librechat-data-provider';
 
 /** Builds the web search tool context with citation format instructions. */
-export function buildWebSearchContext(): string {
+export function buildWebSearchContext(plannerPrompt?: string): string {
+  const customPlannerPrompt = plannerPrompt?.trim();
+  const plannerSection =
+    customPlannerPrompt != null && customPlannerPrompt.length > 0
+      ? `**PLANNER INSTRUCTIONS:**\n${customPlannerPrompt}\n\n`
+      : '';
+
   return `# \`${Tools.web_search}\`:
 Current Date & Time: ${replaceSpecialVars({ text: '{{iso_datetime}}' })}
 
+${plannerSection}
 **Execute immediately without preface.** After search, provide a brief summary addressing the query directly, then structure your response with clear Markdown formatting (## headers, lists, tables). Cite sources properly, tailor tone to query type, and provide comprehensive details.
 
 **CITATION FORMAT - UNICODE ESCAPE SEQUENCES ONLY:**

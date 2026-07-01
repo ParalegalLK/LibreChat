@@ -365,7 +365,6 @@ const ChatForm = memo(function ChatForm({
                 <AudioRecorder
                   methods={methods}
                   ask={submitMessage}
-                  textAreaRef={textAreaRef}
                   disabled={disableInputs || isNotAppendable}
                   isSubmitting={isSubmitting}
                 />

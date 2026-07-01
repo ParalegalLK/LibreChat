@@ -134,6 +134,7 @@ docker compose pull api firecrawl-allowlist-proxy
 docker compose up -d --no-build
 docker compose up -d --no-build api firecrawl-allowlist-proxy
 or
+docker compose up -d --no-build api
 docker compose up -d --no-build firecrawl-allowlist-proxy
 ```
 

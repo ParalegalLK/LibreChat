@@ -1,6 +1,6 @@
 # Firecrawl Allowlist Proxy Runbook (LibreChat)
 
-Last updated: 2026-04-27
+Last updated: 2026-05-04
 
 ## 1) Goal
 
@@ -76,11 +76,45 @@ webSearch:
 - `api.depends_on` includes `firecrawl-allowlist-proxy`
 - `firecrawl-allowlist-proxy` service with `env_file: .env`
 
-Bring up service:
+### A) Dev/local build mode
+
+Use this when the proxy source folder exists on the same host:
 
 ```bash
 docker compose up -d --build firecrawl-allowlist-proxy
 docker compose exec librechat-redis redis-cli FLUSHALL
+docker compose restart api
+```
+
+### B) Production image-only mode (recommended)
+
+Use this when prod should pull prebuilt images from GHCR (no local proxy source required).
+
+Compose example:
+
+```yaml
+services:
+  api:
+    image: ${API_IMAGE:-ghcr.io/paralegallk/chat-paralegal-lk:latest}
+    depends_on:
+      - firecrawl-allowlist-proxy
+
+  firecrawl-allowlist-proxy:
+    image: ${PROXY_IMAGE:-ghcr.io/paralegallk/firecrawl-allowlist-proxy:latest}
+    env_file:
+      - .env
+    environment:
+      - PORT=8787
+```
+
+Deploy proxy update only:
+
+```bash
+export UID=$(id -u)
+export GID=$(id -g)
+export PROXY_IMAGE=ghcr.io/paralegallk/firecrawl-allowlist-proxy:latest
+docker compose pull firecrawl-allowlist-proxy
+docker compose up -d --no-build firecrawl-allowlist-proxy
 docker compose restart api
 ```
 
@@ -207,6 +241,14 @@ For high-confidence answers, verify at 3 levels:
 ## 13) Operational Notes
 
 - `UID/GID` warnings in compose logs are unrelated to scraping behavior.
+- To suppress `UID/GID` warnings:
+
+```bash
+export UID=$(id -u)
+export GID=$(id -g)
+```
+
+- `git pull` updates source code only; it does not pull GHCR images.
 - If config changes do not apply, rebuild/recreate proxy image:
 
 ```bash
@@ -217,6 +259,18 @@ docker compose up -d --build firecrawl-allowlist-proxy
 
 ```bash
 docker compose up -d --force-recreate firecrawl-allowlist-proxy
+```
+
+- Pull only what changed:
+
+```bash
+# only API changed
+docker compose pull api
+docker compose up -d --no-build api
+
+# only proxy changed
+docker compose pull firecrawl-allowlist-proxy
+docker compose up -d --no-build firecrawl-allowlist-proxy
 ```
 
 ## 14) Optional Strict Compliance Mode
@@ -272,7 +326,7 @@ FIRECRAWL_VERSION=v2
 4. Apply config:
 
 ```bash
-docker compose up -d --build api
+docker compose up -d --no-build api
 docker compose exec librechat-redis redis-cli FLUSHALL
 docker compose restart api
 ```
