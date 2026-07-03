@@ -187,6 +187,8 @@ Then hard refresh browser and start new conversation.
 
 User messages store their text in the `text` field. Model (assistant) responses store text in the `content` array (not `text`, which is empty for model messages). Each element has `{type: "text", text: "..."}`.
 
+**Important — model can change per turn.** LibreChat lets a user switch model/endpoint mid-conversation. The `conversations.model` and `conversations.endpoint` fields only reflect the **most recent** turn, not every turn. To find which model actually handled a given question, always check the per-message `model`, `endpoint`, and `sender` fields on the `messages` collection — not the conversation document. A "Bill of Lading" conversation that ends on `claude-sonnet-4-6` may have started on `junior-silva-01`, and a `conversations.model: /silva/i` filter will miss it.
+
 ```bash
 # Get a full conversation (both user and model messages) by conversationId
 docker compose exec -T mongodb mongosh --quiet --eval "

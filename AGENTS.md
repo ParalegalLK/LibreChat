@@ -42,6 +42,157 @@ docker compose exec -T mongodb mongosh --quiet --eval "db.getSiblingDB('LibreCha
 
 **Note:** When I ask "who asked about X?" or similar questions, search the MongoDB `messages` collection for that topic and look up the user. The `user` field is a string ID, so use a two-step query.
 
+## Web Search Usage
+**Note:** Web search usage can be retrieved directly from the MongoDB `messages` collection. Assistant messages that used web search contain an attachment with `type: "web_search"`.
+**Note:** For these message documents, the `user` field is stored as a string, while `users._id` is an `ObjectId`, so use `\$toObjectId` before joining to `users`.
+**Note:** Custom models such as `junior de saram` and `silva` cannot use web search, so if a turn has a `web_search` attachment it did not run on those custom models.
+**Note:** Assistant replies may have empty top-level `text`; the actual answer may be stored in the `content` array under entries with `type: "text"`.
+**Note:** LibreChat allows switching model/endpoint per turn. The `conversations.model` and `conversations.endpoint` fields reflect only the most recent turn. To determine which model actually answered a given question, read the per-message `model`, `endpoint`, and `sender` fields on the `messages` collection — filtering by `conversations.model` will miss earlier turns that used a different model.
+**Note:** For file search lookups, use the same instructions and queries below but replace `web_search` with `file_search`.
+
+```bash
+# Count distinct users who used web search on a UTC day
+docker compose exec -T mongodb mongosh --quiet --eval 'db.getSiblingDB("LibreChat").messages.aggregate([
+  {
+    $match: {
+      createdAt: {
+        $gte: ISODate("2026-05-05T00:00:00Z"),
+        $lt: ISODate("2026-05-06T00:00:00Z")
+      },
+      attachments: { $elemMatch: { type: "web_search" } }
+    }
+  },
+  { $group: { _id: "$user" } },
+  { $count: "distinctUsers" }
+]).toArray()'
+
+# List which users used web search on a UTC day, with counts
+docker compose exec -T mongodb mongosh --quiet --eval 'db.getSiblingDB("LibreChat").messages.aggregate([
+  {
+    $match: {
+      createdAt: {
+        $gte: ISODate("2026-05-05T00:00:00Z"),
+        $lt: ISODate("2026-05-06T00:00:00Z")
+      },
+      attachments: { $elemMatch: { type: "web_search" } }
+    }
+  },
+  { $addFields: { userObjId: { $toObjectId: "$user" } } },
+  { $lookup: { from: "users", localField: "userObjId", foreignField: "_id", as: "userDoc" } },
+  { $unwind: "$userDoc" },
+  {
+    $group: {
+      _id: "$user",
+      email: { $first: "$userDoc.email" },
+      name: { $first: "$userDoc.name" },
+      messageCount: { $sum: 1 },
+      conversations: { $addToSet: "$conversationId" }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      email: 1,
+      name: 1,
+      messageCount: 1,
+      conversationCount: { $size: "$conversations" }
+    }
+  },
+  { $sort: { messageCount: -1 } }
+]).toArray()'
+
+# Show prompts that produced web search replies, excluding a specific user ID
+docker compose exec -T mongodb mongosh --quiet --eval 'db.getSiblingDB("LibreChat").messages.aggregate([
+  {
+    $match: {
+      createdAt: {
+        $gte: ISODate("2026-05-05T00:00:00Z"),
+        $lt: ISODate("2026-05-06T00:00:00Z")
+      },
+      user: { $ne: "ELIJAH_USER_ID" },
+      attachments: { $elemMatch: { type: "web_search" } }
+    }
+  },
+  { $addFields: { userObjId: { $toObjectId: "$user" } } },
+  { $lookup: { from: "users", localField: "userObjId", foreignField: "_id", as: "userDoc" } },
+  { $unwind: "$userDoc" },
+  { $lookup: { from: "messages", localField: "parentMessageId", foreignField: "messageId", as: "parentMsg" } },
+  {
+    $project: {
+      _id: 0,
+      email: "$userDoc.email",
+      createdAt: 1,
+      prompt: {
+        $let: {
+          vars: { p: { $arrayElemAt: ["$parentMsg", 0] } },
+          in: { $ifNull: ["$$p.text", ""] }
+        }
+      }
+    }
+  },
+  { $sort: { email: 1, createdAt: 1 } }
+]).toArray()'
+
+# Show prompt and answer for web search replies, excluding a specific user ID
+docker compose exec -T mongodb mongosh --quiet --eval 'db.getSiblingDB("LibreChat").messages.aggregate([
+  {
+    $match: {
+      createdAt: {
+        $gte: ISODate("2026-05-05T00:00:00Z"),
+        $lt: ISODate("2026-05-06T00:00:00Z")
+      },
+      user: { $ne: "ELIJAH_USER_ID" },
+      attachments: { $elemMatch: { type: "web_search" } }
+    }
+  },
+  { $addFields: { userObjId: { $toObjectId: "$user" } } },
+  { $lookup: { from: "users", localField: "userObjId", foreignField: "_id", as: "userDoc" } },
+  { $unwind: "$userDoc" },
+  { $lookup: { from: "messages", localField: "parentMessageId", foreignField: "messageId", as: "parentMsg" } },
+  {
+    $project: {
+      _id: 0,
+      email: "$userDoc.email",
+      createdAt: 1,
+      prompt: {
+        $let: {
+          vars: { p: { $arrayElemAt: ["$parentMsg", 0] } },
+          in: { $ifNull: ["$$p.text", ""] }
+        }
+      },
+      answer: {
+        $reduce: {
+          input: {
+            $filter: {
+              input: "$content",
+              as: "c",
+              cond: {
+                $and: [
+                  { $eq: ["$$c.type", "text"] },
+                  { $ne: ["$$c.text", null] },
+                  { $ne: ["$$c.text", ""] }
+                ]
+              }
+            }
+          },
+          initialValue: "",
+          in: {
+            $cond: [
+              { $eq: ["$$value", ""] },
+              "$$this.text",
+              { $concat: ["$$value", "\n\n", "$$this.text"] }
+            ]
+          }
+        }
+      }
+    }
+  },
+  { $sort: { email: 1, createdAt: 1 } }
+]).toArray()'
+```
+
+**Note:** If I specifically ask for raw web search callback volume rather than persisted message usage, use API logs and search for `[onSearchResults]`. Log counts can be higher than message counts because one assistant reply may trigger multiple web search callback events.
+
 ## Docker Operations
 ```bash
 docker-compose ps          # Check running services
