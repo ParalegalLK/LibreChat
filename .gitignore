@@ -179,6 +179,14 @@ claude-flow
 
 # Personal notes
 .notes/
+
+# User data / PII — never commit
+Emails.txt
+asgardeo-scim-*.json
+asgardeo-users-import.csv
+desaram-corporateadvisory-users.csv
+config/*.csv
+/reports/
 .playwright-mcp/*
 # Removed Windows wrapper files per user request
 hive-mind-prompt-*.txt
