@@ -78,7 +78,9 @@ const refreshController = async (req, res) => {
 
     try {
       const openIdConfig = getOpenIdConfig();
-      const refreshParams = process.env.OPENID_SCOPE ? { scope: process.env.OPENID_SCOPE } : {};
+      const refreshParams = process.env.OPENID_REFRESH_SCOPE
+        ? { scope: process.env.OPENID_REFRESH_SCOPE }
+        : {};
       const tokenset = await openIdClient.refreshTokenGrant(
         openIdConfig,
         refreshToken,
@@ -122,7 +124,12 @@ const refreshController = async (req, res) => {
       const { password: _pw, __v: _v, totpSecret: _ts, backupCodes: _bc, ...safeUser } = user;
       return res.status(200).send({ token, user: safeUser });
     } catch (error) {
-      logger.error('[refreshController] OpenID token refresh error', error);
+      logger.error('[refreshController] OpenID token refresh error', {
+        message: error?.message,
+        error: error?.error || error?.cause?.error,
+        errorDescription: error?.error_description || error?.cause?.error_description,
+        cause: error?.cause?.message,
+      });
       return res.status(403).send('Invalid OpenID refresh token');
     }
   }

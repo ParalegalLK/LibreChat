@@ -99,6 +99,7 @@ export default defineConfig(({ command }) => ({
       useCredentials: true,
       includeManifestIcons: false,
       workbox: {
+        navigateFallback: null,
         globPatterns: [
           '**/*.{js,css,html}',
           'assets/favicon*.png',

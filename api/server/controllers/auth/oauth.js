@@ -69,6 +69,13 @@ function createOAuthHandler(redirectUri = domains.client) {
       ) {
         await syncUserEntraGroupMemberships(req.user, req.user.tokenset.access_token);
         setOpenIDAuthTokens(req.user.tokenset, req, res, req.user._id.toString());
+
+        if (!req.user.tokenset.refresh_token) {
+          logger.warn(
+            '[OAuth] OpenID provider did not return a refresh token; using LibreChat auth cookies while keeping OpenID access token in session',
+          );
+          await setAuthTokens(req.user._id, res);
+        }
       } else {
         await setAuthTokens(req.user._id, res);
       }

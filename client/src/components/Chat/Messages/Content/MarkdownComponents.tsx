@@ -1,7 +1,7 @@
 import React, { memo, useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { useToastContext } from '@librechat/client';
-import { PermissionTypes, Permissions, apiBaseUrl } from 'librechat-data-provider';
+import { PermissionTypes, Permissions, apiBaseUrl, dataService } from 'librechat-data-provider';
 import Mermaid, { MermaidErrorBoundary } from '~/components/Messages/Content/Mermaid';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
@@ -13,7 +13,6 @@ import store from '~/store';
 
 // S3 URL pattern for paralegal S3 buckets
 const S3_URL_PATTERN = /^https:\/\/paralegal-(prod|decisions)\.s3(\.[a-z0-9-]+)?\.amazonaws\.com\//;
-const PRESIGNED_URL_API = import.meta.env.VITE_PRESIGNED_URL_API || 'https://www.dev.paralegal.lk';
 
 type TCodeProps = {
   inline?: boolean;
@@ -156,20 +155,12 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
       });
 
       try {
-        const response = await fetch(`${PRESIGNED_URL_API}/api/pdf/get-pdf-url`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ link: href }),
-        });
-
-        const data = await response.json();
+        const data = await dataService.openPdf(href);
 
         if (data.success && newWindow) {
           newWindow.location.href = data.presigned_url;
         } else {
-          console.error('Error getting presigned URL:', data.error);
+          console.error('Error getting presigned URL:', data);
           showToast({
             status: 'error',
             message: 'Failed to generate secure link',

@@ -113,6 +113,14 @@ export function getUser(): Promise<t.TUser> {
   return request.get(endpoints.user());
 }
 
+export function openPdf(link: string): Promise<{
+  success: boolean;
+  presigned_url: string;
+  expires_in_seconds?: number;
+}> {
+  return request.post(endpoints.openPdf(), { link });
+}
+
 export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }
