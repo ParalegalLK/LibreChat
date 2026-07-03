@@ -1,6 +1,10 @@
 services:
   api:
-    image: ${API_IMAGE:-ghcr.io/paralegallk/librechat-desaram-ai-prod:latest}
+    build:
+      context: .
+      target: node
+    image: librechat:local  
+    # image: ${API_IMAGE:-ghcr.io/paralegallk/librechat-desaram-ai-prod:latest}
     volumes:
       - ./.env:/app/.env
       - ./librechat.yaml:/app/librechat.yaml
@@ -9,9 +13,22 @@ services:
       - meilisearch
       - rag_api
       - librechat-redis
+      - firecrawl-allowlist-proxy
 
   mongodb:
     image: ${MONGODB_IMAGE:-mongo:8.2}
+
+  firecrawl-allowlist-proxy:
+    # build:
+    #   context: ./firecrawl-allowlist-proxy
+    image: ghcr.io/paralegallk/firecrawl-allowlist-proxy:latest
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - PORT=8787
+    expose:
+      - "8787"
 
   librechat-redis:
     container_name: librechat-redis

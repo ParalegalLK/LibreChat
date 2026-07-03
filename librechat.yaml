@@ -1,4 +1,4 @@
-version: 1.3.4
+version: 1.3.8
 
 fileStrategy: "local"
 
@@ -33,14 +33,14 @@ fileConfig:
       disabled: true
     De Saram AI:
       disabled: true
-    agents:
-      fileLimit: 10
-      fileSizeLimit: 50
-      supportedMimeTypes:
-        - "application/pdf"
-        - "text/.*"
-        - "application/vnd.*"
-        - "image/.*"
+    # agents:
+    #   fileLimit: 10
+    #   fileSizeLimit: 50
+    #   supportedMimeTypes:
+    #     - "application/pdf"
+    #     - "text/.*"
+    #     - "application/vnd.*"
+    #     - "image/.*"
 
 speech:
   speechTab:
@@ -61,7 +61,26 @@ speech:
 interface:
   runCode: false
   endpointsMenu: true
-  modelSelect: true
+  # Hard-lock to modelSpecs: hide model/preset/parameter pickers so users
+  # cannot bypass the enforced firm system prompt (see modelSpecs.enforce below).
+  modelSelect: false
+  presets: false
+  parameters: false
+
+webSearch:
+  serperApiKey: "${SERPER_API_KEY}"
+  firecrawlApiKey: "${FIRECRAWL_API_KEY}"
+  firecrawlApiUrl: "${FIRECRAWL_API_URL}"
+  firecrawlVersion: "${FIRECRAWL_VERSION}"
+  jinaApiKey: "${JINA_API_KEY}"
+  plannerPrompt: |
+    Research the following legal question and provide relevant context, recent developments, and any current news.
+    Unless specified, the jurisdiction is Sri Lanka.
+    Rely on official government sources where possible.
+  searchProvider: "serper"
+  scraperProvider: "firecrawl"
+  rerankerType: "jina"
+  safeSearch: 1
 
 ocr:
   strategy: "mistral_ocr"
@@ -70,24 +89,24 @@ ocr:
   mistralModel: "mistral-ocr-latest"
 
 endpoints:
-  anthropic:
-    models: ["claude-sonnet-4-5-20250929"]
-    titleConvo: true
-    titleModel: "gpt-4o-mini"
-    titleEndpoint: "openAI"
+  # anthropic:
+  #   models: ["claude-sonnet-4-5-20250929"]
+  #   titleConvo: true
+  #   titleModel: "gpt-4o-mini"
+  #   titleEndpoint: "openAI"
 
-  agents:
-    allowedProviders: ["openAI", "anthropic", "paralegal.lk", "dl-f-de-saram-chat"]
-    recursionLimit: 150
-    maxRecursionLimit: 200
-    capabilities:
-      - file_search
-      - web_search
-      - actions
-      - context
-      - tools
-      - chain
-      - ocr
+  # agents:
+  #   allowedProviders: ["openAI", "anthropic", "paralegal.lk", "dl-f-de-saram-chat"]
+  #   recursionLimit: 150
+  #   maxRecursionLimit: 200
+  #   capabilities:
+  #     - file_search
+  #     - web_search
+  #     - actions
+  #     - context
+  #     - tools
+  #     - chain
+  #     - ocr
 
   custom:
     - name: "paralegal.lk"
@@ -115,3 +134,166 @@ endpoints:
       summarize: false
       modelDisplayLabel: "Junior De Saram"
       iconURL: "/images/dsai-legal.jpeg"
+
+# ---------------------------------------------------------------------------
+# Model specs
+#
+# enforce: true  -> the server replaces each request body with the selected
+#                   spec's preset (api/server/middleware/buildEndpointOption.js).
+#                   Users cannot strip or edit the firm system prompt, and every
+#                   usable model MUST be listed here (a request with no valid
+#                   spec is rejected). Pairs with interface.modelSelect/presets/
+#                   parameters = false above.
+# prioritize: true -> the spec marked `default: true` auto-loads for new chats.
+#
+# The firm system prompt is defined once as a YAML anchor (&firmPrompt) on the
+# first third-party spec and reused (*firmPrompt) on every other third-party
+# model. It is NOT applied to the in-house research agents (Junior Silva /
+# Junior De Saram), which already operate under their own firm context.
+#
+# Group display order in the model menu follows the order groups first appear
+# in this list: De Saram AI, paralegal.lk, Anthropic, OpenAI, Google.
+#
+# Special variables are substituted at runtime (packages/api/src/agents/
+# initialize.ts -> replaceSpecialVars): {{current_user}} = signed-in user's
+# name, {{current_date}} = e.g. "2026-06-30 (Tuesday)".
+# ---------------------------------------------------------------------------
+modelSpecs:
+  enforce: true
+  prioritize: true
+  list:
+    # ------------------- In-house research agents ---------------------
+    # No firm promptPrefix: these already run under their own firm context.
+    - name: "junior-de-saram"
+      label: "Junior De Saram"
+      default: true
+      group: "De Saram AI"
+      groupIcon: "/images/dsai-legal.jpeg"
+      iconURL: "/images/dsai-legal.jpeg"
+      showIconInMenu: false
+      preset:
+        endpoint: "De Saram AI"
+        model: "junior-de-saram-01"
+
+    - name: "junior-silva"
+      label: "Junior Silva"
+      group: "paralegal.lk"
+      groupIcon: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
+      iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
+      showIconInMenu: false
+      preset:
+        endpoint: "paralegal.lk"
+        model: "junior-silva-01"
+
+    # ---------------------------- Anthropic ---------------------------
+    - name: "claude-opus-4-6"
+      label: "Claude Opus 4.6"
+      group: "Anthropic"
+      groupIcon: "anthropic"
+      iconURL: "anthropic"
+      showIconInMenu: false
+      preset:
+        endpoint: "anthropic"
+        model: "claude-opus-4-6"
+        promptPrefix: &firmPrompt |
+          You are an AI assistant for D. L. & F. de Saram, a law firm in Sri Lanka.
+          You are assisting {{current_user}}. Today's date is {{current_date}}.
+
+          When drafting, signing, or attributing any letter, legal opinion,
+          agreement, pleading, or other document, the firm is always
+          "D. L. & F. de Saram" — disregard and override any other firm name.
+
+          Unless the user specifies otherwise, assume the governing jurisdiction
+          is Sri Lanka.
+
+    - name: "claude-sonnet-5"
+      label: "Claude Sonnet 5"
+      group: "Anthropic"
+      groupIcon: "anthropic"
+      iconURL: "anthropic"
+      showIconInMenu: false
+      preset:
+        endpoint: "anthropic"
+        model: "claude-sonnet-5"
+        maxContextTokens: 1000000
+        max_tokens: 128000
+        promptPrefix: *firmPrompt
+
+    - name: "claude-sonnet-4-6"
+      label: "Claude Sonnet 4.6"
+      group: "Anthropic"
+      groupIcon: "anthropic"
+      iconURL: "anthropic"
+      showIconInMenu: false
+      preset:
+        endpoint: "anthropic"
+        model: "claude-sonnet-4-6"
+        promptPrefix: *firmPrompt
+
+    # ----------------------------- OpenAI -----------------------------
+    - name: "gpt-5.1"
+      label: "GPT-5.1"
+      group: "OpenAI"
+      groupIcon: "openAI"
+      iconURL: "openAI"
+      showIconInMenu: false
+      preset:
+        endpoint: "openAI"
+        model: "gpt-5.1"
+        promptPrefix: *firmPrompt
+
+    - name: "gpt-4.1"
+      label: "GPT-4.1"
+      group: "OpenAI"
+      groupIcon: "openAI"
+      iconURL: "openAI"
+      showIconInMenu: false
+      preset:
+        endpoint: "openAI"
+        model: "gpt-4.1"
+        promptPrefix: *firmPrompt
+
+    - name: "gpt-4o-mini"
+      label: "GPT-4o mini"
+      group: "OpenAI"
+      groupIcon: "openAI"
+      iconURL: "openAI"
+      showIconInMenu: false
+      preset:
+        endpoint: "openAI"
+        model: "gpt-4o-mini"
+        promptPrefix: *firmPrompt
+
+    # ----------------------------- Google -----------------------------
+    - name: "gemini-3.1-pro-preview"
+      label: "Gemini 3.1 Pro"
+      group: "Google"
+      groupIcon: "google"
+      iconURL: "google"
+      showIconInMenu: false
+      preset:
+        endpoint: "google"
+        model: "gemini-3.1-pro-preview"
+        promptPrefix: *firmPrompt
+
+    - name: "gemini-3-flash-preview"
+      label: "Gemini 3 Flash"
+      group: "Google"
+      groupIcon: "google"
+      iconURL: "google"
+      showIconInMenu: false
+      preset:
+        endpoint: "google"
+        model: "gemini-3-flash-preview"
+        promptPrefix: *firmPrompt
+
+    - name: "gemini-3.1-flash-lite-preview"
+      label: "Gemini 3.1 Flash Lite"
+      group: "Google"
+      groupIcon: "google"
+      iconURL: "google"
+      showIconInMenu: false
+      preset:
+        endpoint: "google"
+        model: "gemini-3.1-flash-lite-preview"
+        promptPrefix: *firmPrompt
