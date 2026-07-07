@@ -11,6 +11,10 @@ module.exports = {
       delete: jest.fn(),
     })),
     logAxiosError: jest.fn(),
+    restoreTenantContextFromReq: jest.fn((req, res, next) => next()),
+    deleteConvoSharedLinksWithCleanup: jest.fn(),
+    deleteAllSharedLinksWithCleanup: jest.fn(),
+    deleteAgentCheckpoints: jest.fn(),
     ...overrides,
   }),
 

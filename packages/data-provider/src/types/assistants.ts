@@ -24,6 +24,9 @@ export enum Tools {
   function = 'function',
   memory = 'memory',
   ui_resources = 'ui_resources',
+  skill = 'skill',
+  read_file = 'read_file',
+  bash_tool = 'bash_tool',
 }
 
 export enum EToolResources {
@@ -206,6 +209,11 @@ export type SupportContact = {
   email?: string;
 };
 
+export type AgentOwnerContact = {
+  name?: string;
+  email?: string;
+};
+
 /**
  * Specifies who can invoke a tool.
  * - 'direct': LLM can call directly
@@ -237,6 +245,19 @@ export type ToolOptions = {
  * Used to customize tool behavior per agent.
  */
 export type AgentToolOptions = Record<string, ToolOptions>;
+
+/**
+ * Configuration for spawning subagents (isolated-context child agents) from an agent.
+ * When `enabled` is true, the agent gets a subagent-spawn tool that can delegate work
+ * to either itself (when `allowSelf` is true) and/or the listed `agent_ids`.
+ */
+export type AgentSubagentsConfig = {
+  enabled?: boolean;
+  /** When true (default), the agent may spawn itself in an isolated context. */
+  allowSelf?: boolean;
+  /** Specific agents that may be spawned as subagents. */
+  agent_ids?: string[];
+};
 
 export type Agent = {
   _id?: string;
@@ -270,8 +291,16 @@ export type Agent = {
   version?: number;
   category?: string;
   support_contact?: SupportContact;
+  owner_contact?: AgentOwnerContact;
   /** Per-tool configuration options (deferred loading, allowed callers, etc.) */
   tool_options?: AgentToolOptions;
+  /** Optional allowlist of skill ObjectIds. Only applies when `skills_enabled`. */
+  skills?: string[];
+  /** Master toggle for skill use on this agent. `true` = active (full catalog unless
+   *  `skills` narrows it). `false`/undefined = inactive (no skills available). */
+  skills_enabled?: boolean;
+  /** Subagent spawning configuration — isolated-context child agents. */
+  subagents?: AgentSubagentsConfig;
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;
@@ -297,6 +326,9 @@ export type AgentCreateParams = {
   | 'category'
   | 'support_contact'
   | 'tool_options'
+  | 'skills'
+  | 'skills_enabled'
+  | 'subagents'
 >;
 
 export type AgentUpdateParams = {
@@ -321,6 +353,9 @@ export type AgentUpdateParams = {
   | 'category'
   | 'support_contact'
   | 'tool_options'
+  | 'skills'
+  | 'skills_enabled'
+  | 'subagents'
 >;
 
 export type AgentListParams = {

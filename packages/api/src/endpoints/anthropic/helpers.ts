@@ -5,11 +5,32 @@ import {
   ThinkingDisplay,
   AnthropicEffort,
   anthropicSettings,
-  supportsContext1m,
+  isMythosClassModel,
   resolveThinkingDisplay,
   supportsAdaptiveThinking,
+  requiresExplicitThinkingDisabled,
 } from 'librechat-data-provider';
 import { matchModelName } from '~/utils/tokens';
+
+const FINE_GRAINED_TOOL_STREAMING_BETA = 'fine-grained-tool-streaming-2025-05-14';
+
+function appendAnthropicBetaHeader(
+  headers: Record<string, string> | undefined,
+  beta: string,
+): Record<string, string> {
+  const nextHeaders = { ...(headers ?? {}) };
+  const betaValues = (nextHeaders['anthropic-beta'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!betaValues.includes(beta)) {
+    betaValues.push(beta);
+  }
+
+  nextHeaders['anthropic-beta'] = betaValues.join(',');
+  return nextHeaders;
+}
 
 /**
  * @param {string} modelName
@@ -30,7 +51,8 @@ function checkPromptCacheSupport(modelName: string): boolean {
     /claude-3-(?:sonnet|haiku|opus)?/.test(modelMatch) ||
     /claude-(?:sonnet|opus|haiku)-[4-9]/.test(modelMatch) ||
     /claude-[4-9]-(?:sonnet|opus|haiku)?/.test(modelMatch) ||
-    /claude-4(?:-(?:sonnet|opus|haiku))?/.test(modelMatch)
+    /claude-4(?:-(?:sonnet|opus|haiku))?/.test(modelMatch) ||
+    isMythosClassModel(modelMatch)
   );
 }
 
@@ -56,10 +78,6 @@ function getClaudeHeaders(
     return {
       'anthropic-beta': 'token-efficient-tools-2025-02-19,output-128k-2025-02-19',
     };
-  } else if (supportsContext1m(model)) {
-    return {
-      'anthropic-beta': 'context-1m-2025-08-07',
-    };
   }
 
   return undefined;
@@ -81,6 +99,16 @@ function configureReasoning(
   const updatedOptions = { ...anthropicInput };
   const currentMaxTokens = updatedOptions.max_tokens ?? updatedOptions.maxTokens;
   const modelName = updatedOptions.model ?? '';
+
+  /**
+   * Sonnet 5 runs adaptive thinking by default when the `thinking` field is
+   * omitted, so honoring a user who turns thinking off requires sending an
+   * explicit disabled config rather than leaving the field unset.
+   */
+  if (!extendedOptions.thinking && modelName && requiresExplicitThinkingDisabled(modelName)) {
+    updatedOptions.thinking = { type: 'disabled' } as AnthropicClientOptions['thinking'];
+    return updatedOptions;
+  }
 
   if (extendedOptions.thinking && modelName && supportsAdaptiveThinking(modelName)) {
     /**
@@ -163,4 +191,11 @@ function configureReasoning(
   return updatedOptions;
 }
 
-export { checkPromptCacheSupport, getClaudeHeaders, configureReasoning, supportsAdaptiveThinking };
+export {
+  FINE_GRAINED_TOOL_STREAMING_BETA,
+  appendAnthropicBetaHeader,
+  checkPromptCacheSupport,
+  getClaudeHeaders,
+  configureReasoning,
+  supportsAdaptiveThinking,
+};

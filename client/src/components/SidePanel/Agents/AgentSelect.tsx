@@ -1,6 +1,6 @@
+import { memo, useCallback, useEffect, useRef } from 'react';
 import { EarthIcon } from 'lucide-react';
 import { ControlCombobox } from '@librechat/client';
-import { memo, useCallback, useEffect, useRef } from 'react';
 import { useFormContext, Controller } from 'react-hook-form';
 import { AgentCapabilities, defaultAgentFormValues } from 'librechat-data-provider';
 import type { UseMutationResult, QueryObserverResult } from '@tanstack/react-query';
@@ -58,6 +58,7 @@ function AgentSelect({
         [AgentCapabilities.web_search]: false,
         [AgentCapabilities.file_search]: false,
         [AgentCapabilities.execute_code]: false,
+        [AgentCapabilities.memory]: false,
         [AgentCapabilities.end_after_tools]: false,
         [AgentCapabilities.hide_sequential_outputs]: false,
       };
@@ -106,7 +107,26 @@ function AgentSelect({
           return;
         }
 
+        if (
+          name === 'skills' &&
+          Array.isArray(value) &&
+          value.every((item) => typeof item === 'string')
+        ) {
+          formValues[name] = value;
+          return;
+        }
+
+        if (name === 'skills_enabled' && typeof value === 'boolean') {
+          formValues[name] = value;
+          return;
+        }
+
         if (name === 'edges' && Array.isArray(value)) {
+          formValues[name] = value;
+          return;
+        }
+
+        if (name === 'subagents' && typeof value === 'object' && value !== null) {
           formValues[name] = value;
           return;
         }

@@ -14,7 +14,11 @@ import type { ServerRequest } from '~/types/http';
 
 interface CapabilityDeps {
   getUserPrincipals: (
-    params: { userId: string | Types.ObjectId; role?: string | null },
+    params: {
+      userId: string | Types.ObjectId;
+      role?: string | null;
+      idOnTheSource?: string | null;
+    },
     session?: ClientSession,
   ) => Promise<ResolvedPrincipal[]>;
   hasCapabilityForPrincipals: (params: {
@@ -28,12 +32,18 @@ export interface CapabilityUser {
   id: string;
   role: string;
   tenantId?: string;
+  /** External member id; pass `null` for local users to skip the fallback lookup. */
+  idOnTheSource?: string | null;
 }
 
 interface CapabilityStore {
   principals: Map<string, ResolvedPrincipal[]>;
   results: Map<string, boolean>;
 }
+
+const DENIAL_WARN_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_DENIAL_WARN_KEYS = 1000;
+const recentDenialWarnings = new Map<string, number>();
 
 export type HasCapabilityFn = (
   user: CapabilityUser,
@@ -58,7 +68,8 @@ export type HasConfigCapabilityFn = (
  * Outside a request context (background jobs, tests), the store is undefined
  * and every check falls through to the database — correct behavior.
  */
-export const capabilityStore = new AsyncLocalStorage<CapabilityStore>();
+export const capabilityStore: AsyncLocalStorage<CapabilityStore> =
+  new AsyncLocalStorage<CapabilityStore>();
 
 export function capabilityContextMiddleware(
   _req: ServerRequest,
@@ -73,6 +84,24 @@ export function capabilityContextMiddleware(
     );
   }
   capabilityStore.run({ principals: new Map(), results: new Map() }, next);
+}
+
+function warnDeniedCapabilityOnce(key: string, message: string): void {
+  const now = Date.now();
+  const lastLoggedAt = recentDenialWarnings.get(key);
+  if (lastLoggedAt !== undefined && now - lastLoggedAt < DENIAL_WARN_INTERVAL_MS) {
+    return;
+  }
+
+  if (recentDenialWarnings.size >= MAX_DENIAL_WARN_KEYS) {
+    const oldestKey = recentDenialWarnings.keys().next().value;
+    if (oldestKey !== undefined) {
+      recentDenialWarnings.delete(oldestKey);
+    }
+  }
+
+  recentDenialWarnings.set(key, now);
+  logger.warn(message);
 }
 
 /**
@@ -130,7 +159,11 @@ export function generateCapabilityCheck(deps: CapabilityDeps): {
     if (cachedPrincipals) {
       principals = cachedPrincipals;
     } else {
-      principals = await getUserPrincipals({ userId: user.id, role: user.role });
+      principals = await getUserPrincipals({
+        userId: user.id,
+        role: user.role,
+        idOnTheSource: user.idOnTheSource,
+      });
       store?.principals.set(principalKey, principals);
     }
 
@@ -184,6 +217,7 @@ export function generateCapabilityCheck(deps: CapabilityDeps): {
           id,
           role: req.user.role ?? '',
           tenantId: (req.user as CapabilityUser).tenantId,
+          idOnTheSource: req.user.idOnTheSource ?? null,
         };
 
         if (await hasCapability(user, capability)) {
@@ -191,7 +225,10 @@ export function generateCapabilityCheck(deps: CapabilityDeps): {
           return;
         }
 
-        logger.warn(`[requireCapability] Forbidden: user ${id} missing capability '${capability}'`);
+        warnDeniedCapabilityOnce(
+          `missing-capability:${id}:${capability}`,
+          `[requireCapability] Forbidden: user ${id} missing capability '${capability}'`,
+        );
         res.status(403).json({ message: 'Forbidden' });
       } catch (err) {
         logger.error(`[requireCapability] Error checking capability: ${capability}`, err);
