@@ -53,6 +53,7 @@ const { getOpenIdConfig, getOpenIdEmail } = require('~/strategies');
 const { getUserById, findSession, updateUser } = require('~/models');
 
 const ORIGINAL_OPENID_SCOPE = process.env.OPENID_SCOPE;
+const ORIGINAL_OPENID_REFRESH_SCOPE = process.env.OPENID_REFRESH_SCOPE;
 const ORIGINAL_OPENID_REFRESH_AUDIENCE = process.env.OPENID_REFRESH_AUDIENCE;
 const ORIGINAL_JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -226,6 +227,7 @@ describe('refreshController – OpenID path', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     delete process.env.OPENID_SCOPE;
+    delete process.env.OPENID_REFRESH_SCOPE;
     delete process.env.OPENID_REFRESH_AUDIENCE;
     process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
 
@@ -261,6 +263,12 @@ describe('refreshController – OpenID path', () => {
       delete process.env.OPENID_SCOPE;
     } else {
       process.env.OPENID_SCOPE = ORIGINAL_OPENID_SCOPE;
+    }
+
+    if (ORIGINAL_OPENID_REFRESH_SCOPE === undefined) {
+      delete process.env.OPENID_REFRESH_SCOPE;
+    } else {
+      process.env.OPENID_REFRESH_SCOPE = ORIGINAL_OPENID_REFRESH_SCOPE;
     }
 
     if (ORIGINAL_OPENID_REFRESH_AUDIENCE === undefined) {
@@ -537,7 +545,7 @@ describe('refreshController – OpenID path', () => {
     expect(sentPayload.user).not.toHaveProperty('federatedTokens');
   });
 
-  it('should pass scope-only OpenID refresh params when OPENID_SCOPE is set', async () => {
+  it('should omit scope on refresh when only OPENID_SCOPE is set', async () => {
     process.env.OPENID_SCOPE = 'openid profile email';
 
     await refreshController(req, res);
@@ -545,12 +553,25 @@ describe('refreshController – OpenID path', () => {
     expect(openIdClient.refreshTokenGrant).toHaveBeenCalledWith(
       { some: 'config' },
       'stored-refresh',
-      { scope: 'openid profile email' },
+      {},
+    );
+  });
+
+  it('should pass scope-only OpenID refresh params when OPENID_REFRESH_SCOPE is set', async () => {
+    process.env.OPENID_SCOPE = 'openid profile email';
+    process.env.OPENID_REFRESH_SCOPE = 'openid';
+
+    await refreshController(req, res);
+
+    expect(openIdClient.refreshTokenGrant).toHaveBeenCalledWith(
+      { some: 'config' },
+      'stored-refresh',
+      { scope: 'openid' },
     );
   });
 
   it('should pass scope and audience OpenID refresh params when both are set', async () => {
-    process.env.OPENID_SCOPE = 'openid profile email';
+    process.env.OPENID_REFRESH_SCOPE = 'openid profile email';
     process.env.OPENID_REFRESH_AUDIENCE = 'https://api.example.com';
 
     await refreshController(req, res);
@@ -578,7 +599,7 @@ describe('refreshController – OpenID path', () => {
   });
 
   it('should omit empty OpenID refresh audience', async () => {
-    process.env.OPENID_SCOPE = 'openid profile email';
+    process.env.OPENID_REFRESH_SCOPE = 'openid profile email';
     process.env.OPENID_REFRESH_AUDIENCE = '';
 
     await refreshController(req, res);
@@ -591,7 +612,7 @@ describe('refreshController – OpenID path', () => {
   });
 
   it('should keep OpenID refresh diagnostics free of token and audience values', async () => {
-    process.env.OPENID_SCOPE = 'openid profile email';
+    process.env.OPENID_REFRESH_SCOPE = 'openid profile email';
     process.env.OPENID_REFRESH_AUDIENCE = 'https://api.example.com';
 
     await refreshController(req, res);
