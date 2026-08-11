@@ -5,6 +5,7 @@ const {
   resetPasswordController,
   registrationController,
   graphTokenController,
+  openIdTokenController,
   refreshController,
 } = require('~/server/controllers/AuthController');
 const {
@@ -72,5 +73,6 @@ router.post('/2fa/disable', middleware.requireJwtAuth, disable2FA);
 router.post('/2fa/backup/regenerate', middleware.requireJwtAuth, regenerateBackupCodes);
 
 router.get('/graph-token', middleware.requireJwtAuth, graphTokenController);
+router.get('/openid-token', middleware.requireJwtAuth, openIdTokenController);
 
 module.exports = router;

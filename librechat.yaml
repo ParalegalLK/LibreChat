@@ -33,6 +33,8 @@ fileConfig:
       disabled: true
     De Saram AI:
       disabled: true
+    De Saram AI Drafter:
+      disabled: true
     # agents:
     #   fileLimit: 10
     #   fileSizeLimit: 50
@@ -113,13 +115,13 @@ endpoints:
       apiKey: "${RAG_API_KEY}"
       baseURL: "https://www.chat.paralegal.lk/talkapi/v1"
       models:
-        default: ["junior-silva-01"]
+        default: ["researcher-silva-2"]
         fetch: false
       titleConvo: true
       titleModel: "gpt-4o-mini"
       titleEndpoint: "openAI"
       summarize: false
-      modelDisplayLabel: "Junior Silva"
+      modelDisplayLabel: "Researcher Silva"
       iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
 
     - name: "De Saram AI"
@@ -135,6 +137,24 @@ endpoints:
       modelDisplayLabel: "Junior De Saram"
       iconURL: "/images/dsai-legal.jpeg"
 
+    # Second De Saram AI backend: the document drafter/formatter service
+    # (document-drafter repo), reached over the shared junior-drafter-network
+    # docker network. A custom endpoint has exactly one baseURL, so this is a
+    # separate endpoint entry, but it uses the same De Saram AI key and is
+    # shown under the De Saram AI group in the model menu (see modelSpecs).
+    - name: "De Saram AI Drafter"
+      apiKey: "${DLF_DE_SARAM_API_KEY}"
+      baseURL: "http://junior-drafter-formatter:9124/v1"
+      models:
+        default: ["document-drafter-de-saram-01"]
+        fetch: false
+      titleConvo: true
+      titleModel: "gpt-4o-mini"
+      titleEndpoint: "openAI"
+      summarize: false
+      modelDisplayLabel: "De Saram Document Drafter"
+      iconURL: "/images/dsai-legal.jpeg"
+
 # ---------------------------------------------------------------------------
 # Model specs
 #
@@ -148,7 +168,7 @@ endpoints:
 #
 # The firm system prompt is defined once as a YAML anchor (&firmPrompt) on the
 # first third-party spec and reused (*firmPrompt) on every other third-party
-# model. It is NOT applied to the in-house research agents (Junior Silva /
+# model. It is NOT applied to the in-house research agents (Researcher Silva /
 # Junior De Saram), which already operate under their own firm context.
 #
 # Group display order in the model menu follows the order groups first appear
@@ -175,15 +195,25 @@ modelSpecs:
         endpoint: "De Saram AI"
         model: "junior-de-saram-01"
 
-    - name: "junior-silva"
-      label: "Junior Silva"
+    - name: "de-saram-document-drafter"
+      label: "De Saram Document Drafter"
+      group: "De Saram AI"
+      groupIcon: "/images/dsai-legal.jpeg"
+      iconURL: "/images/dsai-legal.jpeg"
+      showIconInMenu: false
+      preset:
+        endpoint: "De Saram AI Drafter"
+        model: "document-drafter-de-saram-01"
+
+    - name: "researcher-silva"
+      label: "Researcher Silva"
       group: "paralegal.lk"
       groupIcon: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
       iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
       showIconInMenu: false
       preset:
         endpoint: "paralegal.lk"
-        model: "junior-silva-01"
+        model: "researcher-silva-2"
 
     # ---------------------------- Anthropic ---------------------------
     - name: "claude-opus-4-6"

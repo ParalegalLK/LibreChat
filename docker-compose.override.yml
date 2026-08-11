@@ -8,6 +8,9 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./librechat.yaml:/app/librechat.yaml
+    networks:
+      - default
+      - junior-drafter-network
     depends_on:
       - mongodb
       - meilisearch
@@ -55,3 +58,7 @@ services:
 
 volumes:
   librechat-redis-data:
+
+networks:
+  junior-drafter-network:
+    external: true
