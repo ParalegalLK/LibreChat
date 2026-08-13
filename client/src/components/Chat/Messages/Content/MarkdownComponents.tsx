@@ -236,6 +236,33 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
 
   const props: { target?: string; onClick?: React.MouseEventHandler } = { target: '_blank' };
 
+  // Handle in-page anchors (e.g. #user-content-fn-3 footnote refs from remark-gfm):
+  // scroll within the same tab instead of opening a new one. Footnote ids repeat
+  // across messages, so walk up from the clicked link and use the first ancestor
+  // containing the target id, keeping the jump inside the current message.
+  if (href.startsWith('#')) {
+    const handleAnchorClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+      const id = decodeURIComponent(href.slice(1));
+      const selector = `[id="${CSS.escape(id)}"]`;
+      let target: Element | null = null;
+      let node: Element | null = event.currentTarget.parentElement;
+      while (node && !target) {
+        target = node.querySelector(selector);
+        node = node.parentElement;
+      }
+      (target ?? document.getElementById(id))?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    };
+    return (
+      <a href={href} onClick={handleAnchorClick}>
+        {children}
+      </a>
+    );
+  }
+
   // Handle S3 URLs with presigned URL fetching
   if (isS3Url) {
     return (
