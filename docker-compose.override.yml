@@ -11,6 +11,7 @@ services:
     networks:
       - default
       - junior-drafter-network
+      - document-drafter-network
     depends_on:
       - mongodb
       - meilisearch
@@ -61,4 +62,6 @@ volumes:
 
 networks:
   junior-drafter-network:
+    external: true
+  document-drafter-network:
     external: true
