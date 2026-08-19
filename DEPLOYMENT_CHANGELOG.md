@@ -49,16 +49,55 @@ each pending entry's commit is in the build, then move it to *Shipped*.
   This dist includes ALL client-side changes of the two commits above.
 - **Merge before next build:** `fix/footnote-anchor-scroll` → `desaram-ai-prod`.
 
+### 2026-08-14 — Theme-aware paralegal.lk icon in model selector (`0fb3c4402`)
+- **What:** New `ParalegalLKIcon` component (mark follows `currentColor`: black in
+  light mode, white in dark mode) replacing the static white-box
+  `/images/paralegal-lk.svg` in the model selector. Registered as icon key
+  `"paralegal"`; `librechat.yaml` researcher-silva spec now uses
+  `groupIcon: "paralegal"` / `iconURL: "paralegal"`.
+- **Files:** `packages/client/src/svgs/ParalegalLKIcon.tsx` (new),
+  `packages/client/src/svgs/index.ts`, `client/src/hooks/Endpoint/Icons.tsx`
+  (committed as `0fb3c4402` on `fix/footnote-anchor-scroll`); the
+  `librechat.yaml` part is in `ef1061ba3`.
+- **Hot-patched:** rebuilt `packages/client` dist + client bundle on host, then
+  `docker cp client/dist LibreChat:/app/client/dist` (after `rm -rf` of the old dist).
+  This dist supersedes the 2026-08-13 copy and includes all its changes.
+- **Breaks on recreate:** selector falls back to the endpoint/unknown icon for the
+  paralegal.lk spec (yaml `iconURL: "paralegal"` no longer resolves); old client
+  bundle returns (also reverting the two entries above).
+- **Incident note:** first deploy attempt copied the bundle to `/app/client/dis`
+  (typo) after deleting `dist`, crash-looping the api (`ENOENT index.html`).
+  Fixed by copying to the correct path; stray `dis` dir removed.
+
+### 2026-08-19 — Drafter model renamed + rewired to new backend (`ef1061ba3`)
+- **What:** Drafter model ID `document-drafter-de-saram-01` → `document-drafter-01-preview`
+  (labels now "Document Drafter"); drafter endpoint `baseURL` changed from
+  `http://junior-drafter-formatter:9124/v1` to `http://document-drafter:9124/v1`
+  because the backend moved to the new `document-drafter` container
+  (`~/document-drafter` repo compose) on the external `document-drafter-network`.
+- **Applied live:** mounted `librechat.yaml` + Redis `FLUSHALL` + `docker compose
+  restart api`; api container attached to the network with
+  `docker network connect document-drafter-network LibreChat`.
+- **Breaks on recreate:** nothing — `docker-compose.override.yml` now declares
+  `document-drafter-network`, so a recreated api container re-attaches automatically.
+  (The old backend container relies on nothing here; requires the `document-drafter`
+  compose stack to be up.)
+- **Leftovers:** old `junior-drafter-formatter` container is stopped but not removed;
+  `junior-drafter-network` is still declared/attached (still used by the main
+  De Saram AI junior backend). New container publishes host port 9124 — review
+  firewall exposure.
+
 ## Uncommitted host state (not in git at all)
 
-- `librechat.yaml` — modified on host (mounted into container, live). Commit or the
-  change exists only on this machine.
-- `MODEL_CONFIGURATION.md` — untracked.
+*(none as of 2026-08-19 — `librechat.yaml`, `docker-compose.override.yml`,
+`MODEL_CONFIGURATION.md`, and the paralegal.lk icon changes are committed as
+`0fb3c4402` / `ef1061ba3` on `fix/footnote-anchor-scroll`.)*
 
 ## Next image build checklist
 
 1. Merge `fix/footnote-anchor-scroll` into `desaram-ai-prod`.
-2. Commit / reconcile `librechat.yaml` and `MODEL_CONFIGURATION.md`.
+2. ~~Commit / reconcile `librechat.yaml`, `MODEL_CONFIGURATION.md`, and the
+   paralegal.lk icon changes~~ — done 2026-08-19 (`0fb3c4402`, `ef1061ba3`).
 3. Build from `desaram-ai-prod` tip (`./scripts/pre-build-cleanup.sh --build`).
 4. After deploy, verify:
    - `docker compose exec -T api ls /app/api/server/services/OpenIdTokenService.js` (drafter auth)
