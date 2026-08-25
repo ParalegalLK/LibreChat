@@ -51,6 +51,19 @@ docker compose restart api
 ```
 Then hard-refresh the browser (Ctrl+Shift+R).
 
+## S3 PDF Links (private URL generator)
+
+Markdown links to `paralegal-prod` / `paralegal-decisions` S3 objects are opened via `POST /api/pdf/open`
+(`api/server/routes/pdf.js`), which asks the private URL generator (`PDF_GENERATOR_URL`, default
+`https://www.dev.paralegal.lk/api/pdf/get-pdf-url`) for a presigned URL.
+
+- SSO sign-ins forward the user's own Asgardeo access token.
+- Email + password sign-ins (including `provider: openid` accounts that still have a password) have **no**
+  Asgardeo token. The route falls back to `PDF_GENERATOR_SERVICE_TOKEN`, then a client-credentials grant
+  using `PDF_GENERATOR_CLIENT_ID/SECRET` (default `OPENID_CLIENT_ID/SECRET`), and forwards the request
+  regardless — the generator decides. Look for `tokenSource` (`user` / `service` / `none`) in the
+  `[pdf.open]` log lines when triaging.
+
 ## Adding a New OpenAI Model
 
 To add a new OpenAI model (e.g., GPT-5.1), update two files:
