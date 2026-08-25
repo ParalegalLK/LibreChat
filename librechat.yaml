@@ -13,9 +13,18 @@ fileConfig:
       - "^application/vnd\\.ms-powerpoint$"
       - "^application/epub\\+zip$"
   endpoints:
+    # Uniform limits: 10 files per message, 50 MB per file, 512 MB combined per message.
+    # 'default' covers endpoints without their own entry, but anthropic/agents have
+    # hardcoded code defaults (512 MB per file) that shadow 'default', so they are
+    # overridden explicitly below.
+    default:
+      fileLimit: 10
+      fileSizeLimit: 50
+      totalSizeLimit: 512
     openAI:
       fileLimit: 10
       fileSizeLimit: 50
+      totalSizeLimit: 512
       supportedMimeTypes:
         - "application/pdf"
         - "text/.*"
@@ -24,14 +33,25 @@ fileConfig:
     custom:
       fileLimit: 10
       fileSizeLimit: 50
+      totalSizeLimit: 512
       supportedMimeTypes:
         - "application/pdf"
         - "text/.*"
         - "application/vnd.*"
         - "image/.*"
+    anthropic:
+      fileLimit: 10
+      fileSizeLimit: 50
+      totalSizeLimit: 512
+    agents:
+      fileLimit: 10
+      fileSizeLimit: 50
+      totalSizeLimit: 512
     paralegal.lk:
       disabled: true
     De Saram AI:
+      disabled: true
+    De Saram AI Drafter:
       disabled: true
     # agents:
     #   fileLimit: 10
@@ -113,14 +133,14 @@ endpoints:
       apiKey: "${RAG_API_KEY}"
       baseURL: "https://www.chat.paralegal.lk/talkapi/v1"
       models:
-        default: ["junior-silva-01"]
+        default: ["researcher-silva-2"]
         fetch: false
       titleConvo: true
       titleModel: "gpt-4o-mini"
       titleEndpoint: "openAI"
       summarize: false
-      modelDisplayLabel: "Junior Silva"
-      iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
+      modelDisplayLabel: "Researcher Silva"
+      iconURL: "/images/paralegal-lk.svg"
 
     - name: "De Saram AI"
       apiKey: "${DLF_DE_SARAM_API_KEY}"
@@ -135,6 +155,24 @@ endpoints:
       modelDisplayLabel: "Junior De Saram"
       iconURL: "/images/dsai-legal.jpeg"
 
+    # Second De Saram AI backend: the document drafter/formatter service
+    # (document-drafter repo), reached over the external document-drafter-network
+    # docker network. A custom endpoint has exactly one baseURL, so this is a
+    # separate endpoint entry, but it uses the same De Saram AI key and is
+    # shown under the De Saram AI group in the model menu (see modelSpecs).
+    - name: "De Saram AI Drafter"
+      apiKey: "${DLF_DE_SARAM_API_KEY}"
+      baseURL: "http://document-drafter:9124/v1"
+      models:
+        default: ["document-drafter-01-preview"]
+        fetch: false
+      titleConvo: true
+      titleModel: "gpt-4o-mini"
+      titleEndpoint: "openAI"
+      summarize: false
+      modelDisplayLabel: "Document Drafter"
+      iconURL: "/images/dsai-legal.jpeg"
+
 # ---------------------------------------------------------------------------
 # Model specs
 #
@@ -144,11 +182,16 @@ endpoints:
 #                   usable model MUST be listed here (a request with no valid
 #                   spec is rejected). Pairs with interface.modelSelect/presets/
 #                   parameters = false above.
-# prioritize: true -> the spec marked `default: true` auto-loads for new chats.
+# prioritize: true -> a spec auto-loads for new chats. With no spec marked
+#                   `default: true`, the client picks the user's last-used spec
+#                   (localStorage lastSelectedSpec), falling back to the first
+#                   spec in this list for first-time users. Do NOT add
+#                   `default: true` to any spec — it would force every new chat
+#                   to that spec instead of carrying over the last-used model.
 #
 # The firm system prompt is defined once as a YAML anchor (&firmPrompt) on the
 # first third-party spec and reused (*firmPrompt) on every other third-party
-# model. It is NOT applied to the in-house research agents (Junior Silva /
+# model. It is NOT applied to the in-house research agents (Researcher Silva /
 # Junior De Saram), which already operate under their own firm context.
 #
 # Group display order in the model menu follows the order groups first appear
@@ -166,7 +209,6 @@ modelSpecs:
     # No firm promptPrefix: these already run under their own firm context.
     - name: "junior-de-saram"
       label: "Junior De Saram"
-      default: true
       group: "De Saram AI"
       groupIcon: "/images/dsai-legal.jpeg"
       iconURL: "/images/dsai-legal.jpeg"
@@ -175,15 +217,26 @@ modelSpecs:
         endpoint: "De Saram AI"
         model: "junior-de-saram-01"
 
-    - name: "junior-silva"
-      label: "Junior Silva"
+    - name: "de-saram-document-drafter"
+      label: "Document Drafter"
+      group: "De Saram AI"
+      groupIcon: "/images/dsai-legal.jpeg"
+      iconURL: "/images/dsai-legal.jpeg"
+      showIconInMenu: false
+      preset:
+        endpoint: "De Saram AI Drafter"
+        model: "document-drafter-01-preview"
+        maxContextTokens: 252000
+
+    - name: "researcher-silva"
+      label: "Researcher Silva"
       group: "paralegal.lk"
-      groupIcon: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
-      iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
+      groupIcon: "paralegal"
+      iconURL: "paralegal"
       showIconInMenu: false
       preset:
         endpoint: "paralegal.lk"
-        model: "junior-silva-01"
+        model: "researcher-silva-2"
 
     # ---------------------------- Anthropic ---------------------------
     - name: "claude-opus-4-6"

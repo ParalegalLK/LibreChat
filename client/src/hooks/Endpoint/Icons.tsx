@@ -9,6 +9,7 @@ import {
   AzureMinimalIcon,
   GoogleMinimalIcon,
   CustomMinimalIcon,
+  ParalegalLKIcon,
 } from '@librechat/client';
 import type { IconMapProps, AgentIconMapProps, IconsRecord } from '~/common';
 import UnknownIcon from './UnknownIcon';
@@ -68,5 +69,6 @@ export const icons: IconsRecord = {
   [EModelEndpoint.azureAssistants]: AssistantAvatar,
   [EModelEndpoint.agents]: AgentAvatar,
   [EModelEndpoint.bedrock]: Bedrock,
+  paralegal: ParalegalLKIcon,
   unknown: UnknownIcon,
 };

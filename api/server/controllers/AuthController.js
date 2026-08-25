@@ -18,6 +18,7 @@ const {
   findUser,
 } = require('~/models');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
+const { getValidOpenIdAccessToken } = require('~/server/services/OpenIdTokenService');
 const { getOpenIdConfig, getOpenIdEmail } = require('~/strategies');
 
 const registrationController = async (req, res) => {
@@ -215,10 +216,42 @@ const graphTokenController = async (req, res) => {
   }
 };
 
+/**
+ * Returns a valid Asgardeo access token for the signed-in OpenID user,
+ * refreshing it server-side when expired. Used by the client to authorize
+ * drafter file-server downloads.
+ */
+const openIdTokenController = async (req, res) => {
+  try {
+    if (!req.user.openidId || req.user.provider !== 'openid') {
+      return res.status(403).json({
+        message: 'OpenID authentication required',
+      });
+    }
+
+    const userId = req.user._id?.toString() ?? req.user.id;
+    const result = await getValidOpenIdAccessToken(userId);
+    if (!result) {
+      return res.status(401).json({
+        message: 'No valid OpenID token available; please sign in again',
+      });
+    }
+
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (error) {
+    logger.error('[openIdTokenController] Failed to obtain OpenID access token:', error);
+    res.status(500).json({
+      message: 'Failed to obtain OpenID access token',
+    });
+  }
+};
+
 module.exports = {
   refreshController,
   registrationController,
   resetPasswordController,
   resetPasswordRequestController,
   graphTokenController,
+  openIdTokenController,
 };

@@ -8,6 +8,7 @@ const {
 } = require('@librechat/api');
 const { syncUserEntraGroupMemberships } = require('~/server/services/PermissionService');
 const { setAuthTokens, setOpenIDAuthTokens } = require('~/server/services/AuthService');
+const { storeOpenIdTokens } = require('~/server/services/OpenIdTokenService');
 const getLogStores = require('~/cache/getLogStores');
 const { checkBan } = require('~/server/middleware');
 const { generateToken } = require('~/models');
@@ -34,6 +35,12 @@ function createOAuthHandler(redirectUri = domains.client) {
       await checkBan(req, res);
       if (req.banned) {
         return;
+      }
+
+      /** Persist Asgardeo tokens so the client can later fetch a valid
+       *  provider access token (e.g. for drafter file downloads). */
+      if (req.user?.provider === 'openid' && req.user?.tokenset) {
+        await storeOpenIdTokens(req.user._id.toString(), req.user.tokenset);
       }
 
       /** Check if this is an admin panel redirect (cross-origin) */

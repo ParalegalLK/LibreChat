@@ -100,7 +100,8 @@ export default defineConfig(({ command }) => ({
               // Keep index.html in precache since Workbox navigation fallback uses it.
               globIgnores: ['images/**/*', '**/*.map'],
               maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
-              navigateFallbackDenylist: [/^\/oauth/, /^\/api/],
+              // /files is the drafter file server (proxied by nginx, not the SPA)
+              navigateFallbackDenylist: [/^\/oauth/, /^\/api/, /^\/files/],
             },
             includeAssets: [],
             manifest: {

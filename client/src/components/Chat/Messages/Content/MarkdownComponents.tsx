@@ -1,7 +1,7 @@
 import React, { memo, useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { useToastContext } from '@librechat/client';
-import { PermissionTypes, Permissions, apiBaseUrl } from 'librechat-data-provider';
+import { PermissionTypes, Permissions, apiBaseUrl, request } from 'librechat-data-provider';
 import Mermaid, { MermaidErrorBoundary } from '~/components/Messages/Content/Mermaid';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
@@ -13,7 +13,11 @@ import store from '~/store';
 
 // S3 URL pattern for paralegal S3 buckets
 const S3_URL_PATTERN = /^https:\/\/paralegal-(prod|decisions)\.s3(\.[a-z0-9-]+)?\.amazonaws\.com\//;
-const PRESIGNED_URL_API = import.meta.env.VITE_PRESIGNED_URL_API || 'https://www.dev.paralegal.lk';
+const PRESIGNED_URL_API = import.meta.env.VITE_PRESIGNED_URL_API || 'https://www.desaram.ai';
+
+// De Saram drafter file-server links; downloads require the user's Asgardeo
+// access token, fetched from the API and appended as a ?token= query param
+const DRAFTER_FILES_PATTERN = /^https:\/\/(www\.)?desaram\.ai\/files\//;
 
 type TCodeProps = {
   inline?: boolean;
@@ -118,6 +122,10 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
   // Check if this is an S3 URL that needs presigned URL handling
   const isS3Url = useMemo(() => S3_URL_PATTERN.test(href), [href]);
 
+  // Check if this is a drafter file-server link that needs an Asgardeo token
+  const isDrafterFileUrl = useMemo(() => DRAFTER_FILES_PATTERN.test(href), [href]);
+  const [isLoadingDrafterFile, setIsLoadingDrafterFile] = useState(false);
+
   const {
     file_id = '',
     filename = '',
@@ -194,7 +202,66 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
     [href, isLoadingPresigned, showToast],
   );
 
+  // Handler for drafter file links - fetches the Asgardeo access token and
+  // navigates with it appended; the response is a Content-Disposition
+  // attachment, so same-tab navigation just triggers the download.
+  const handleDrafterFileClick = useCallback(
+    async (event: React.MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+
+      if (isLoadingDrafterFile) {
+        return;
+      }
+
+      setIsLoadingDrafterFile(true);
+
+      try {
+        const { access_token } = await request.get<{ access_token: string }>(
+          '/api/auth/openid-token',
+        );
+        const separator = href.includes('?') ? '&' : '?';
+        window.location.href = `${href}${separator}token=${encodeURIComponent(access_token)}`;
+      } catch (error) {
+        console.error('Error fetching download token:', error);
+        showToast({
+          status: 'error',
+          message: 'Failed to authorize download. Please sign in again.',
+        });
+      } finally {
+        setIsLoadingDrafterFile(false);
+      }
+    },
+    [href, isLoadingDrafterFile, showToast],
+  );
+
   const props: { target?: string; onClick?: React.MouseEventHandler } = { target: '_blank' };
+
+  // Handle in-page anchors (e.g. #user-content-fn-3 footnote refs from remark-gfm):
+  // scroll within the same tab instead of opening a new one. Footnote ids repeat
+  // across messages, so walk up from the clicked link and use the first ancestor
+  // containing the target id, keeping the jump inside the current message.
+  if (href.startsWith('#')) {
+    const handleAnchorClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+      const id = decodeURIComponent(href.slice(1));
+      const selector = `[id="${CSS.escape(id)}"]`;
+      let target: Element | null = null;
+      let node: Element | null = event.currentTarget.parentElement;
+      while (node && !target) {
+        target = node.querySelector(selector);
+        node = node.parentElement;
+      }
+      (target ?? document.getElementById(id))?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    };
+    return (
+      <a href={href} onClick={handleAnchorClick}>
+        {children}
+      </a>
+    );
+  }
 
   // Handle S3 URLs with presigned URL fetching
   if (isS3Url) {
@@ -205,6 +272,20 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
         target="_blank"
         rel="noopener noreferrer"
         style={{ cursor: isLoadingPresigned ? 'wait' : 'pointer' }}
+      >
+        {children}
+      </a>
+    );
+  }
+
+  // Handle drafter file links with token-authorized download
+  if (isDrafterFileUrl) {
+    return (
+      <a
+        href={href}
+        onClick={handleDrafterFileClick}
+        rel="noopener noreferrer"
+        style={{ cursor: isLoadingDrafterFile ? 'wait' : 'pointer' }}
       >
         {children}
       </a>
