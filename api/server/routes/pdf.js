@@ -171,6 +171,34 @@ const resolveGeneratorAccessToken = async (req) => {
   return { token: '', source: 'none' };
 };
 
+/**
+ * Browser-identifying headers so the generator sees the call as coming from the
+ * chat app, not a bare Node process. Forwards what the browser sent; falls back
+ * to `PDF_GENERATOR_ORIGIN` / `DOMAIN_CLIENT` for Origin and Referer.
+ */
+const getForwardedHeaders = (req) => {
+  const fallbackOrigin = (
+    process.env.PDF_GENERATOR_ORIGIN ||
+    process.env.DOMAIN_CLIENT ||
+    ''
+  ).replace(/\/+$/, '');
+  const origin = req.get('origin') || fallbackOrigin;
+  const referer = req.get('referer') || (fallbackOrigin ? `${fallbackOrigin}/` : '');
+  const userAgent = req.get('user-agent');
+
+  const headers = {};
+  if (origin) {
+    headers.Origin = origin;
+  }
+  if (referer) {
+    headers.Referer = referer;
+  }
+  if (userAgent) {
+    headers['User-Agent'] = userAgent;
+  }
+  return headers;
+};
+
 const splitList = (value = '') =>
   value
     .split(',')
@@ -284,7 +312,7 @@ router.post('/open', async (req, res) => {
   const generatorUrl = getGeneratorUrl() || DEFAULT_PDF_GENERATOR_URL;
   const { token: accessToken, source: tokenSource } = await resolveGeneratorAccessToken(req);
 
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', ...getForwardedHeaders(req) };
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }

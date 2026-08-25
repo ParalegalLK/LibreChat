@@ -14,6 +14,8 @@ const jsonResponse = (body, status = 200) => ({
 });
 
 const ENV_KEYS = [
+  'DOMAIN_CLIENT',
+  'PDF_GENERATOR_ORIGIN',
   'PDF_GENERATOR_URL',
   'PDF_GENERATOR_BASE_URL',
   'PDF_GENERATOR_TOKEN_URL',
@@ -209,6 +211,39 @@ describe('POST /api/pdf/open', () => {
 
     expect(res.status).toBe(403);
     expect(generatorCalls()).toHaveLength(0);
+  });
+
+  it('forwards the browser Origin, Referer and User-Agent to the generator', async () => {
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ success: true, presigned_url: 'https://signed.example/9' }),
+    );
+    const app = buildApp({ id: 'u9', provider: 'local' });
+
+    await request(app)
+      .post('/api/pdf/open')
+      .set('Origin', 'https://www.chat.paralegal.lk')
+      .set('Referer', 'https://www.chat.paralegal.lk/c/abc')
+      .set('User-Agent', 'Mozilla/5.0 (test)')
+      .send({ link: S3_LINK });
+
+    const { headers } = generatorCalls()[0][1];
+    expect(headers.Origin).toBe('https://www.chat.paralegal.lk');
+    expect(headers.Referer).toBe('https://www.chat.paralegal.lk/c/abc');
+    expect(headers['User-Agent']).toBe('Mozilla/5.0 (test)');
+  });
+
+  it('falls back to DOMAIN_CLIENT for Origin and Referer', async () => {
+    process.env.DOMAIN_CLIENT = 'https://www.chat.paralegal.lk/';
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ success: true, presigned_url: 'https://signed.example/10' }),
+    );
+    const app = buildApp({ id: 'u10', provider: 'local' });
+
+    await request(app).post('/api/pdf/open').send({ link: S3_LINK });
+
+    const { headers } = generatorCalls()[0][1];
+    expect(headers.Origin).toBe('https://www.chat.paralegal.lk');
+    expect(headers.Referer).toBe('https://www.chat.paralegal.lk/');
   });
 
   it('rejects links outside the paralegal S3 buckets', async () => {
