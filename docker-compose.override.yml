@@ -23,9 +23,9 @@ services:
     image: ${MONGODB_IMAGE:-mongo:8.2}
 
   firecrawl-allowlist-proxy:
-    # build:
-    #   context: ./firecrawl-allowlist-proxy
-    image: ghcr.io/paralegallk/firecrawl-allowlist-proxy:latest
+    build:
+      context: ./firecrawl-allowlist-proxy
+    # image: ghcr.io/paralegallk/firecrawl-allowlist-proxy:latest
     restart: always
     env_file:
       - .env
