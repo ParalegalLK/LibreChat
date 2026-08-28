@@ -8,6 +8,8 @@ const useSpeechToText = (
 ): {
   isLoading?: boolean;
   isListening?: boolean;
+  audioStream: MediaStream | null;
+  cancelRecording: () => void;
   stopRecording: () => void | (() => Promise<void>);
   startRecording: () => void | (() => Promise<void>);
 } => {
@@ -19,6 +21,7 @@ const useSpeechToText = (
     isLoading: speechIsLoadingBrowser,
     startRecording: startSpeechRecordingBrowser,
     stopRecording: stopSpeechRecordingBrowser,
+    cancelRecording: cancelSpeechRecordingBrowser,
   } = useSpeechToTextBrowser(setText, onTranscriptionComplete);
 
   const {
@@ -26,6 +29,8 @@ const useSpeechToText = (
     isLoading: speechIsLoadingExternal,
     externalStartRecording: startSpeechRecordingExternal,
     externalStopRecording: stopSpeechRecordingExternal,
+    externalCancelRecording: cancelSpeechRecordingExternal,
+    audioStream: externalAudioStream,
   } = useSpeechToTextExternal(setText, onTranscriptionComplete);
 
   const isListening = externalSpeechToText ? speechIsListeningExternal : speechIsListeningBrowser;
@@ -37,12 +42,18 @@ const useSpeechToText = (
   const stopRecording = externalSpeechToText
     ? stopSpeechRecordingExternal
     : stopSpeechRecordingBrowser;
+  const cancelRecording = externalSpeechToText
+    ? cancelSpeechRecordingExternal
+    : cancelSpeechRecordingBrowser;
+  const audioStream = externalSpeechToText ? externalAudioStream : null;
 
   return {
     isLoading,
     isListening,
+    audioStream,
     stopRecording,
     startRecording,
+    cancelRecording,
   };
 };
 

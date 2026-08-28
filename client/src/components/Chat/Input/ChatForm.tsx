@@ -9,6 +9,7 @@ import {
   useTextarea,
   useAutoSave,
   useLocalize,
+  useAudioRecorder,
   useRequiresKey,
   useHandleKeyUp,
   useQueryParams,
@@ -21,6 +22,7 @@ import {
   useAddedChatContext,
   useAssistantsMapContext,
 } from '~/Providers';
+import { RecordingWaveform, RecordingCancel } from './Recording';
 import PendingManualSkillsChips from './PendingManualSkillsChips';
 import { cn, getModelSpec, removeFocusRings } from '~/utils';
 import { useGetStartupConfig } from '~/data-provider';
@@ -172,6 +174,8 @@ const ChatForm = memo(function ChatForm({
   });
 
   const { submitMessage, submitPrompt } = useSubmitMessage();
+  const recorder = useAudioRecorder({ methods, ask: submitMessage, isSubmitting });
+  const isRecording = SpeechToText && recorder.isListening;
 
   const handleKeyUp = useHandleKeyUp({
     index,
@@ -311,8 +315,9 @@ const ChatForm = memo(function ChatForm({
             />
             {endpoint && (
               <div className={cn('flex', isRTL ? 'flex-row-reverse' : 'flex-row')}>
+                {isRecording && <RecordingWaveform stream={recorder.audioStream} />}
                 <div
-                  className="relative flex-1"
+                  className={cn('relative flex-1', isRecording && 'hidden')}
                   style={
                     isCollapsed
                       ? {
@@ -351,7 +356,12 @@ const ChatForm = memo(function ChatForm({
                     )}
                   />
                 </div>
-                <div className="flex flex-col items-start justify-start pr-2.5 pt-1.5">
+                <div
+                  className={cn(
+                    'flex flex-col items-start justify-start pr-2.5 pt-1.5',
+                    isRecording && 'hidden',
+                  )}
+                >
                   <CollapseChat
                     isCollapsed={isCollapsed}
                     isScrollable={isMoreThanThreeRows}
@@ -367,13 +377,17 @@ const ChatForm = memo(function ChatForm({
               )}
             >
               <div className={`${isRTL ? 'mr-2' : 'ml-2'}`}>
-                <AttachFileChat
-                  conversation={conversation}
-                  disableInputs={disableInputs}
-                  files={files}
-                  setFiles={setFiles}
-                  setFilesLoading={setFilesLoading}
-                />
+                {isRecording ? (
+                  <RecordingCancel onCancel={recorder.cancelRecording} />
+                ) : (
+                  <AttachFileChat
+                    conversation={conversation}
+                    disableInputs={disableInputs}
+                    files={files}
+                    setFiles={setFiles}
+                    setFilesLoading={setFilesLoading}
+                  />
+                )}
               </div>
               <BadgeRow
                 showEphemeralBadges={
@@ -396,10 +410,11 @@ const ChatForm = memo(function ChatForm({
               <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
               {SpeechToText && (
                 <AudioRecorder
-                  methods={methods}
-                  ask={submitMessage}
                   disabled={disableInputs || isNotAppendable}
-                  isSubmitting={isSubmitting}
+                  isListening={recorder.isListening}
+                  isLoading={recorder.isLoading}
+                  onStart={recorder.startRecording}
+                  onStop={recorder.stopRecording}
                 />
               )}
               <div className={`${isRTL ? 'ml-2' : 'mr-2'}`}>
