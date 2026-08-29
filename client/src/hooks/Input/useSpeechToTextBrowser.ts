@@ -151,11 +151,20 @@ const useSpeechToTextBrowser = (
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isBrowserSTTEnabled, toggleListening]);
 
+  const cancelListening = useCallback(() => {
+    if (!isListening || !hasSpeechRecognitionController(SpeechRecognition)) {
+      return;
+    }
+    SpeechRecognition.stopListening();
+    resetTranscript();
+  }, [isListening, resetTranscript]);
+
   return {
     isListening,
     isLoading: false,
     startRecording: toggleListening,
     stopRecording: toggleListening,
+    cancelRecording: cancelListening,
   };
 };
 

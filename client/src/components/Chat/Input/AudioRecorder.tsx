@@ -1,107 +1,53 @@
-import { memo, useCallback, useRef } from 'react';
-import { MicOff } from 'lucide-react';
-import { useToastContext, TooltipAnchor, ListeningIcon, Spinner } from '@librechat/client';
-import { useLocalize, useSpeechToText, useGetAudioSettings } from '~/hooks';
-import { globalAudioId, type TAskFunction } from '~/common';
-import { useChatFormContext } from '~/Providers';
+import { memo } from 'react';
+import { TooltipAnchor, ListeningIcon, Spinner } from '@librechat/client';
+import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
-const isExternalSTT = (speechToTextEndpoint: string) => speechToTextEndpoint === 'external';
 export default memo(function AudioRecorder({
   disabled,
-  ask,
-  methods,
-  isSubmitting,
+  isListening,
+  isLoading,
+  onStart,
+  onStop,
 }: {
   disabled: boolean;
-  ask: TAskFunction;
-  methods: ReturnType<typeof useChatFormContext>;
-  isSubmitting: boolean;
+  isListening: boolean;
+  isLoading: boolean;
+  onStart: () => void;
+  onStop: () => void;
 }) {
-  const { setValue, reset, getValues } = methods;
   const localize = useLocalize();
-  const { showToast } = useToastContext();
-  const { speechToTextEndpoint } = useGetAudioSettings();
 
-  const existingTextRef = useRef<string>('');
-  const isSubmittingRef = useRef(isSubmitting);
-  isSubmittingRef.current = isSubmitting;
-
-  const onTranscriptionComplete = useCallback(
-    (text: string) => {
-      if (isSubmittingRef.current) {
-        showToast({
-          message: localize('com_ui_speech_while_submitting'),
-          status: 'error',
-        });
-        return;
-      }
-      if (text) {
-        const globalAudio = document.getElementById(globalAudioId) as HTMLAudioElement | null;
-        if (globalAudio) {
-          console.log('Unmuting global audio');
-          globalAudio.muted = false;
+  if (isListening) {
+    return (
+      <TooltipAnchor
+        description={localize('com_ui_stop_recording')}
+        render={
+          <button
+            id="audio-recorder"
+            type="button"
+            data-testid="stop-recording-button"
+            aria-label={localize('com_ui_stop_recording')}
+            aria-pressed="true"
+            onClick={onStop}
+            className="flex size-9 items-center justify-center rounded-full bg-text-primary p-1 transition-all duration-200 hover:opacity-80"
+          >
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              className="icon-lg text-surface-primary"
+              aria-hidden="true"
+            >
+              <rect x="7" y="7" width="10" height="10" rx="1.25" fill="currentColor" />
+            </svg>
+          </button>
         }
-        /** For external STT, append existing text to the transcription */
-        const finalText =
-          isExternalSTT(speechToTextEndpoint) && existingTextRef.current
-            ? `${existingTextRef.current} ${text}`
-            : text;
-        const submitted = ask({ text: finalText });
-        if (submitted === false) {
-          return;
-        }
-        reset({ text: '' });
-        existingTextRef.current = '';
-      }
-    },
-    [ask, reset, showToast, localize, speechToTextEndpoint],
-  );
-
-  const setText = useCallback(
-    (text: string) => {
-      let newText = text;
-      if (isExternalSTT(speechToTextEndpoint)) {
-        /** For external STT, the text comes as a complete transcription, so append to existing */
-        newText = existingTextRef.current ? `${existingTextRef.current} ${text}` : text;
-      } else {
-        /** For browser STT, the transcript is cumulative, so we only need to prepend the existing text once */
-        newText = existingTextRef.current ? `${existingTextRef.current} ${text}` : text;
-      }
-      setValue('text', newText, {
-        shouldValidate: true,
-      });
-    },
-    [setValue, speechToTextEndpoint],
-  );
-
-  const { isListening, isLoading, startRecording, stopRecording } = useSpeechToText(
-    setText,
-    onTranscriptionComplete,
-  );
-
-  const handleStartRecording = async () => {
-    existingTextRef.current = getValues('text') || '';
-    startRecording();
-  };
-
-  const handleStopRecording = async () => {
-    stopRecording();
-    /** For browser STT, clear the reference since text was already being updated */
-    if (!isExternalSTT(speechToTextEndpoint)) {
-      existingTextRef.current = '';
-    }
-  };
-
-  const renderIcon = () => {
-    if (isListening === true) {
-      return <MicOff className="stroke-red-500" />;
-    }
-    if (isLoading === true) {
-      return <Spinner className="stroke-text-secondary" />;
-    }
-    return <ListeningIcon className="stroke-text-secondary" />;
-  };
+      />
+    );
+  }
 
   return (
     <TooltipAnchor
@@ -111,15 +57,19 @@ export default memo(function AudioRecorder({
           id="audio-recorder"
           type="button"
           aria-label={localize('com_ui_use_micrphone')}
-          onClick={isListening === true ? handleStopRecording : handleStartRecording}
-          disabled={disabled}
+          aria-pressed="false"
+          onClick={onStart}
+          disabled={disabled || isLoading}
           className={cn(
             'flex size-9 items-center justify-center rounded-full p-1 transition-colors hover:bg-surface-hover',
           )}
           title={localize('com_ui_use_micrphone')}
-          aria-pressed={isListening}
         >
-          {renderIcon()}
+          {isLoading ? (
+            <Spinner className="stroke-text-secondary" />
+          ) : (
+            <ListeningIcon className="stroke-text-secondary" />
+          )}
         </button>
       }
     />

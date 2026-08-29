@@ -36,6 +36,7 @@ export { default as useIsActiveItem } from './useIsActiveItem';
 export { default as useLocalStorage } from './useLocalStorage';
 export { default as useDocumentTitle } from './useDocumentTitle';
 export { default as useSpeechToText } from './Input/useSpeechToText';
+export { default as useAudioRecorder } from './Input/useAudioRecorder';
 export { default as useTextToSpeech } from './Input/useTextToSpeech';
 export { default as useGenerationsByLatest } from './useGenerationsByLatest';
 export { default as useLocalizedConfig } from './useLocalizedConfig';

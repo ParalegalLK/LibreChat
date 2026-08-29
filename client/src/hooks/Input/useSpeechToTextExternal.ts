@@ -18,8 +18,10 @@ const useSpeechToTextExternal = (
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   const audioChunksRef = useRef<Blob[]>([]);
+  const discardRecordingRef = useRef(false);
   const [permission, setPermission] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [activeStream, setActiveStream] = useState<MediaStream | null>(null);
   const [isRequestBeingMade, setIsRequestBeingMade] = useState(false);
   const [audioMimeType, setAudioMimeType] = useState<string>(() => getBestSupportedMimeType());
 
@@ -110,6 +112,13 @@ const useSpeechToTextExternal = (
   };
 
   const handleStop = () => {
+    if (discardRecordingRef.current) {
+      discardRecordingRef.current = false;
+      audioChunksRef.current = [];
+      cleanup();
+      return;
+    }
+
     if (audioChunksRef.current.length > 0) {
       const audioBlob = new Blob(audioChunksRef.current, { type: audioMimeType });
       const fileExtension = getFileExtension(audioMimeType);
@@ -189,6 +198,7 @@ const useSpeechToTextExternal = (
         if (!audioContextRef.current && autoTranscribeAudio && speechToText) {
           monitorSilence(audioStream.current, stopRecording);
         }
+        setActiveStream(audioStream.current);
         setIsListening(true);
       } catch (error) {
         showToast({ message: `Error starting recording: ${error}`, status: 'error' });
@@ -214,6 +224,7 @@ const useSpeechToTextExternal = (
         animationFrameIdRef.current = null;
       }
 
+      setActiveStream(null);
       setIsListening(false);
     } else {
       showToast({ message: 'MediaRecorder is not recording', status: 'error' });
@@ -227,6 +238,15 @@ const useSpeechToTextExternal = (
     }
 
     startRecording();
+  };
+
+  const externalCancelRecording = () => {
+    if (!isListening) {
+      return;
+    }
+
+    discardRecordingRef.current = true;
+    stopRecording();
   };
 
   const externalStopRecording = () => {
@@ -275,6 +295,8 @@ const useSpeechToTextExternal = (
     isListening,
     externalStopRecording,
     externalStartRecording,
+    externalCancelRecording,
+    audioStream: activeStream,
     isLoading: isProcessing,
   };
 };
