@@ -46,10 +46,14 @@ The script does:
 ## Redis Cache
 LibreChat caches config (including `librechat.yaml` settings) in Redis. After changing UI/config settings, flush the cache and restart the API:
 ```bash
-docker compose exec librechat-redis redis-cli FLUSHALL
+./scripts/flush-config-cache.sh
 docker compose restart api
 ```
 Then hard-refresh the browser (Ctrl+Shift+R).
+
+**Never use `redis-cli FLUSHALL`** — Redis also holds `OPENID_SESSION:*` keys (server-side SSO
+sessions). FLUSHALL signs every user out: their next token refresh fails against Asgardeo and
+they land on the login page. The script deletes only config/roles/tool caches.
 
 ## Adding a New OpenAI Model
 
@@ -78,7 +82,7 @@ modelSpecs:
 
 ### Step 3: Apply changes
 ```bash
-docker compose exec librechat-redis redis-cli FLUSHALL
+./scripts/flush-config-cache.sh
 docker compose restart api
 ```
 Then hard-refresh the browser (Ctrl+Shift+R) and start a **new conversation**.
@@ -96,7 +100,7 @@ https://platform.openai.com/docs/models/compare
    ```
 2. **Flush cache and restart**
    ```bash
-   docker compose exec librechat-redis redis-cli FLUSHALL
+   ./scripts/flush-config-cache.sh
    docker compose restart api
    ```
 3. **Hard refresh browser** (Ctrl+Shift+R)
@@ -144,8 +148,8 @@ docker compose logs -f api
 
 #### Nuclear option - full reset
 ```bash
+./scripts/flush-config-cache.sh   # while redis is still up
 docker compose down
-docker compose exec librechat-redis redis-cli FLUSHALL
 docker compose up -d
 ```
 Then hard refresh browser and start new conversation.

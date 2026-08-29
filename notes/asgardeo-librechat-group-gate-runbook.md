@@ -127,7 +127,7 @@ In this project, `.env` is bind-mounted into `/app/.env` inside the `api` contai
 After `.env` changes:
 
 1. `docker compose restart api`
-2. `docker compose exec librechat-redis redis-cli FLUSHALL`
+2. `./scripts/flush-config-cache.sh`
 3. `docker compose restart api`
 
 ---

@@ -171,7 +171,7 @@ docker compose logs rag_api | grep "Initialized embeddings"
 ## Step 5: Apply Config Changes (after any updates)
 
 ```bash
-docker compose exec librechat-redis redis-cli FLUSHALL
+./scripts/flush-config-cache.sh
 docker compose restart api
 ```
 
@@ -215,7 +215,7 @@ docker compose logs api | grep -i "file\|rag\|ocr"
 | "RAG API is not reachable" | Check `RAG_API_URL` in .env, verify rag_api container is running |
 | Files not embedding | Check `RAG_OPENAI_API_KEY` is valid |
 | OCR not working | Verify `MISTRAL_API_KEY`, use "File Context (OCR)" not "File Search" |
-| Changes not applying | Flush Redis: `docker compose exec librechat-redis redis-cli FLUSHALL` |
+| Changes not applying | Flush Redis: `./scripts/flush-config-cache.sh` |
 
 ---
 
