@@ -850,7 +850,7 @@ const setOpenIDAuthTokens = (
       secure: shouldUseSecureCookie(),
       sameSite: 'strict',
     });
-    if (userId && isEnabled(process.env.OPENID_REUSE_TOKENS)) {
+    if (userId && refreshToken && isEnabled(process.env.OPENID_REUSE_TOKENS)) {
       /** Bind image cookie identity to the durable refresh-token session. */
       const refreshTokenHash = createHash('sha256').update(refreshToken).digest('base64url');
       const signedUserId = jwt.sign(

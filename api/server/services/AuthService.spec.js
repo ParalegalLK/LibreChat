@@ -468,6 +468,11 @@ describe('setOpenIDAuthTokens', () => {
         expect.anything(),
         expect.anything(),
       );
+      expect(res.cookie).not.toHaveBeenCalledWith(
+        'openid_user_id',
+        expect.anything(),
+        expect.anything(),
+      );
     });
 
     it('should use existingRefreshToken when tokenset has no refresh_token', () => {
