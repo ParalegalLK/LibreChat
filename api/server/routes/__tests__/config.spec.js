@@ -542,6 +542,18 @@ describe('GET /api/config', () => {
       expect(response.body.customFooter).toBe('authenticated footer text');
     });
 
+    it('should substitute {{current_year}} in customFooter', async () => {
+      process.env.CUSTOM_FOOTER = 'AI can make mistakes | © paralegal.lk {{current_year}}';
+      mockGetAppConfig.mockResolvedValue(baseAppConfig);
+      const app = createApp(mockUser);
+
+      const response = await request(app).get('/api/config');
+
+      expect(response.body.customFooter).toBe(
+        `AI can make mistakes | © paralegal.lk ${new Date().getFullYear()}`,
+      );
+    });
+
     it('should advertise CloudFront cookie refresh when signed-cookie mode is active', async () => {
       mockGetAppConfig.mockResolvedValue(baseAppConfig);
       mockGetCloudFrontConfig.mockReturnValue({
