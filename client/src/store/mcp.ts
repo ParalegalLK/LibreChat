@@ -1,6 +1,14 @@
 import { atom } from 'jotai';
 import { atomFamily, atomWithStorage } from 'jotai/utils';
 import { Constants, LocalStorageKeys } from 'librechat-data-provider';
+import { createTabIsolatedStorage } from './jotai-utils';
+
+/**
+ * Tab-isolated storage for MCP values — prevents cross-tab sync so that
+ * each tab's MCP server selections are independent (especially for new chats
+ * which all share the same `LAST_MCP_new` localStorage key).
+ */
+const mcpTabIsolatedStorage = createTabIsolatedStorage<string[]>();
 
 /**
  * Creates a storage atom for MCP values per conversation
@@ -10,7 +18,7 @@ export const mcpValuesAtomFamily = atomFamily((conversationId: string | null) =>
   const key = conversationId ?? Constants.NEW_CONVO;
   const storageKey = `${LocalStorageKeys.LAST_MCP_}${key}`;
 
-  return atomWithStorage<string[]>(storageKey, [], undefined, { getOnInit: true });
+  return atomWithStorage<string[]>(storageKey, [], mcpTabIsolatedStorage, { getOnInit: true });
 });
 
 /**
@@ -31,6 +39,11 @@ export interface MCPServerInitState {
   isCancellable: boolean;
   oauthUrl: string | null;
   oauthStartTime: number | null;
+  /** Last initialize attempt reported a request-scoped server whose connection
+   * is deferred to the next chat turn (runtime body placeholders) — its tools
+   * cannot be enumerated up front. Consumers attach such servers wholesale via
+   * the `mcp_all` wildcard instead of waiting for a tool list. */
+  connectionDeferred: boolean;
 }
 
 const defaultServerInitState: MCPServerInitState = {
@@ -38,6 +51,7 @@ const defaultServerInitState: MCPServerInitState = {
   isCancellable: false,
   oauthUrl: null,
   oauthStartTime: null,
+  connectionDeferred: false,
 };
 
 /**

@@ -5,6 +5,7 @@ import { VisuallyHidden } from '@ariakit/react';
 import { Tools } from 'librechat-data-provider';
 import { X, Globe, Newspaper, Image, ChevronDown, File, Download } from 'lucide-react';
 import {
+  Button,
   OGDialog,
   AnimatedTabs,
   OGDialogClose,
@@ -18,6 +19,7 @@ import { FaviconImage, getCleanDomain } from '~/components/Web/SourceHovercard';
 import SourcesErrorBoundary from './SourcesErrorBoundary';
 import { useFileDownload } from '~/data-provider';
 import { useSearchContext } from '~/Providers';
+import { cn, triggerDownload } from '~/utils';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
 
@@ -80,7 +82,7 @@ function SourceItem({ source, expanded = false }: SourceItemProps) {
               </a>
             }
           />
-          <Ariakit.HovercardDisclosure className="absolute right-2 rounded-full text-text-primary focus:outline-none focus:ring-2 focus:ring-ring">
+          <Ariakit.HovercardDisclosure className="absolute right-2 rounded-full text-text-primary focus:outline-none focus:ring-2 focus:ring-text-primary">
             <VisuallyHidden>
               {localize('com_citation_more_details', { label: domain })}
             </VisuallyHidden>
@@ -89,38 +91,43 @@ function SourceItem({ source, expanded = false }: SourceItemProps) {
 
           <Ariakit.Hovercard
             gutter={16}
-            className="dark:shadow-lg-dark z-[999] w-[300px] max-w-[calc(100vw-2rem)] rounded-xl border border-border-medium bg-surface-secondary p-3 text-text-primary shadow-lg"
+            className={cn(
+              'z-[999] w-[320px] max-w-[calc(100vw-2rem)] rounded-xl border border-border-medium bg-surface-secondary p-3 text-text-primary shadow-lg',
+              'origin-top-left scale-95 opacity-0 transition-[opacity,transform] duration-150 ease-out',
+              'data-[enter]:scale-100 data-[enter]:opacity-100',
+              'data-[leave]:scale-95 data-[leave]:opacity-0',
+            )}
             portal={true}
             unmountOnHide={true}
           >
             <div className="flex gap-3">
-              <div className="flex-1">
-                <div className="mb-2 flex items-center">
-                  <FaviconImage domain={domain} className="mr-2" />
+              <div className="min-w-0 flex-1">
+                <div className="mb-1.5 overflow-hidden text-sm">
+                  <FaviconImage domain={domain} className="float-left mr-2 mt-0.5" />
+                  <span className="float-right ml-2 max-w-[40%] truncate text-xs text-text-secondary">
+                    {domain}
+                  </span>
                   <a
                     href={source.link}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="line-clamp-2 cursor-pointer overflow-hidden text-sm font-bold text-[#0066cc] hover:underline dark:text-blue-400 md:line-clamp-3"
+                    className="font-medium text-text-primary hover:underline"
                   >
-                    {source.attribution || domain}
+                    {source.title || source.link}
                   </a>
                 </div>
-                <h4 className="mb-1.5 mt-0 text-xs text-text-primary md:text-sm">
-                  {source.title || source.link}
-                </h4>
                 {'snippet' in source && source.snippet && (
-                  <span className="my-2 text-ellipsis break-all text-xs text-text-secondary md:text-sm">
+                  <p className="line-clamp-4 break-words text-xs text-text-secondary md:text-sm">
                     {source.snippet}
-                  </span>
+                  </p>
                 )}
               </div>
               {'imageUrl' in source && source.imageUrl && (
-                <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-md">
+                <div className="size-24 shrink-0 overflow-hidden rounded-md">
                   <img
                     src={source.imageUrl}
                     alt={source.title || localize('com_sources_image_alt')}
-                    className="h-full w-full object-cover"
+                    className="size-full object-cover"
                   />
                 </div>
               )}
@@ -165,6 +172,7 @@ type AgentFileSource = {
   filename: string;
   bytes?: number;
   type?: string;
+  source?: string;
   pages?: number[];
   relevance?: number;
   pageRelevance?: Record<number, number>;
@@ -205,7 +213,9 @@ const FileItem = React.memo(function FileItem({
   const user = useRecoilValue(store.user);
   const { showToast } = useToastContext();
 
-  const { refetch: downloadFile } = useFileDownload(user?.id ?? '', file.file_id);
+  const { refetch: downloadFile } = useFileDownload(user?.id ?? '', file.file_id, {
+    source: file.source,
+  });
 
   // Extract error message logic to avoid duplication
   const getErrorMessage = useCallback(
@@ -248,13 +258,7 @@ const FileItem = React.memo(function FileItem({
           });
           return;
         }
-        const link = document.createElement('a');
-        link.href = stream.data;
-        link.setAttribute('download', file.filename);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(stream.data);
+        triggerDownload(stream.data, file.filename);
       } catch (error) {
         console.error('Error downloading file:', error);
       }
@@ -298,10 +302,10 @@ const FileItem = React.memo(function FileItem({
           <span className="truncate text-xs font-medium text-text-secondary">
             {localize('com_sources_agent_file')}
           </span>
-          {!isLocalFile && <Download className="ml-auto h-3 w-3" aria-hidden="true" />}
+          {!isLocalFile && <Download className="ml-auto size-3" aria-hidden="true" />}
         </div>
         <div className="mt-1 min-w-0">
-          <span className="line-clamp-2 break-all text-left text-sm font-medium text-text-primary md:line-clamp-3">
+          <span className="line-clamp-2 break-words text-left text-sm font-medium text-text-primary md:line-clamp-3">
             {file.filename}
           </span>
           {file.pages && file.pages.length > 0 && (
@@ -316,7 +320,9 @@ const FileItem = React.memo(function FileItem({
             </span>
           )}
         </div>
-        {error && <div className="mt-1 text-xs text-red-500">{getErrorMessage(error)}</div>}
+        {error && (
+          <div className="mt-1 text-xs text-text-destructive">{getErrorMessage(error)}</div>
+        )}
       </button>
     );
   }
@@ -337,10 +343,10 @@ const FileItem = React.memo(function FileItem({
         <span className="truncate text-xs font-medium text-text-secondary">
           {localize('com_sources_agent_file')}
         </span>
-        {!isLocalFile && <Download className="ml-auto h-3 w-3" aria-hidden="true" />}
+        {!isLocalFile && <Download className="ml-auto size-3" aria-hidden="true" />}
       </div>
       <div className="mt-1 min-w-0">
-        <span className="line-clamp-2 break-all text-left text-sm font-medium text-text-primary md:line-clamp-3">
+        <span className="line-clamp-2 break-words text-left text-sm font-medium text-text-primary md:line-clamp-3">
           {file.filename}
         </span>
         {file.pages && file.pages.length > 0 && (
@@ -350,7 +356,7 @@ const FileItem = React.memo(function FileItem({
           </span>
         )}
       </div>
-      {error && <div className="mt-1 text-xs text-red-500">{getErrorMessage(error)}</div>}
+      {error && <div className="mt-1 text-xs text-text-destructive">{getErrorMessage(error)}</div>}
     </button>
   );
 });
@@ -419,8 +425,8 @@ const SourcesGroup = React.memo(function SourcesGroup({
             </div>
           </OGDialogTrigger>
         )}
-        <OGDialogContent className="flex max-h-[80vh] max-w-full flex-col overflow-hidden rounded-lg bg-surface-primary p-0 md:max-w-[600px]">
-          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-light bg-surface-primary px-3 py-2">
+        <OGDialogContent className="flex max-h-[80vh] max-w-full flex-col overflow-hidden rounded-lg bg-surface-dialog p-0 md:max-w-[600px]">
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-light bg-surface-dialog px-3 py-2">
             <OGDialogTitle className="text-base font-medium">
               {localize('com_sources_title')}
             </OGDialogTitle>
@@ -428,7 +434,7 @@ const SourcesGroup = React.memo(function SourcesGroup({
               className="rounded-full p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary"
               aria-label={localize('com_ui_close')}
             >
-              <X className="h-4 w-4" aria-hidden="true" />
+              <X className="size-4" aria-hidden="true" />
             </OGDialogClose>
           </div>
           <div className="flex-1 overflow-y-auto px-3 py-2">
@@ -506,7 +512,7 @@ function FilesGroup({ files, messageId, conversationId, limit = 3 }: FilesGroupP
             <div className="flex items-center gap-2">
               <div className="relative flex">
                 {remainingFiles.slice(0, 3).map((_, i) => (
-                  <File key={`file-icon-${i}`} className={`h-4 w-4 ${i > 0 ? 'ml-[-6px]' : ''}`} />
+                  <File key={`file-icon-${i}`} className={`size-4 ${i > 0 ? 'ml-[-6px]' : ''}`} />
                 ))}
               </div>
               <span className="truncate text-xs font-medium text-text-secondary">
@@ -515,8 +521,8 @@ function FilesGroup({ files, messageId, conversationId, limit = 3 }: FilesGroupP
             </div>
           </OGDialogTrigger>
         )}
-        <OGDialogContent className="flex max-h-[80vh] max-w-full flex-col overflow-hidden rounded-lg bg-surface-primary p-0 md:max-w-[600px]">
-          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-light bg-surface-primary px-3 py-2">
+        <OGDialogContent className="flex max-h-[80vh] max-w-full flex-col overflow-hidden rounded-lg bg-surface-dialog p-0 md:max-w-[600px]">
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-light bg-surface-dialog px-3 py-2">
             <OGDialogTitle className="text-base font-medium">
               {localize('com_sources_agent_files')}
             </OGDialogTitle>
@@ -524,7 +530,7 @@ function FilesGroup({ files, messageId, conversationId, limit = 3 }: FilesGroupP
               className="rounded-full p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary"
               aria-label={localize('com_ui_close')}
             >
-              <X className="h-4 w-4" aria-hidden="true" />
+              <X className="size-4" aria-hidden="true" />
             </OGDialogClose>
           </div>
           <div className="flex-1 overflow-y-auto px-3 py-2">
@@ -720,7 +726,7 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
         containerClassName="flex min-w-full mb-4"
         tabListClassName="flex items-center mb-2 border-b border-border-light overflow-x-auto"
         tabPanelClassName="w-full overflow-x-auto scrollbar-none md:mx-0 md:px-0"
-        tabClassName="flex items-center whitespace-nowrap text-xs font-medium text-token-text-secondary px-1 pt-2 pb-1 border-b-2 border-transparent data-[state=active]:text-text-primary outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        tabClassName="flex items-center whitespace-nowrap text-xs font-medium text-token-text-secondary px-1 pt-2 pb-1 border-b-2 border-transparent data-[state=active]:text-text-primary outline-none focus:ring-2 focus:ring-text-primary focus:ring-offset-2"
       />
     </div>
   );
@@ -747,13 +753,15 @@ export default function Sources(props: SourcesProps) {
       <div className="mb-2 text-sm text-text-secondary">
         {localize('com_sources_error_fallback')}
       </div>
-      <button
+      <Button
+        variant="outline"
+        size="sm"
         onClick={() => window.location.reload()}
-        className="hover:bg-surface-primary-hover rounded-md bg-surface-primary px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-ring"
+        className="rounded-md bg-surface-primary px-3 py-1 text-sm text-text-primary hover:bg-surface-hover"
         aria-label={localize('com_sources_reload_page')}
       >
         {localize('com_ui_refresh')}
-      </button>
+      </Button>
     </div>
   );
 

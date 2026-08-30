@@ -1,6 +1,6 @@
 import React from 'react';
-import { Pencil, PlugZap, SlidersHorizontal, RefreshCw, X } from 'lucide-react';
 import { Spinner, TooltipAnchor } from '@librechat/client';
+import { Pencil, PlugZap, SlidersHorizontal, RefreshCw, X, Trash2 } from 'lucide-react';
 import type { MCPServerStatus } from 'librechat-data-provider';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
@@ -17,6 +17,7 @@ interface MCPCardActionsProps {
   onConfigClick: (e: React.MouseEvent) => void;
   onInitialize: () => void;
   onCancel: (e: React.MouseEvent) => void;
+  onRevoke?: () => void;
 }
 
 /**
@@ -26,6 +27,7 @@ interface MCPCardActionsProps {
  * - Pencil: Edit server definition (Settings panel only)
  * - PlugZap: Connect/Authenticate (for disconnected/error servers)
  * - SlidersHorizontal: Configure custom variables (for connected servers with vars)
+ * - Trash2: Revoke OAuth access (for connected OAuth servers)
  * - RefreshCw: Reconnect/Refresh (for connected servers)
  * - Spinner: Loading state (with X on hover for cancel)
  */
@@ -41,6 +43,7 @@ export default function MCPCardActions({
   onConfigClick,
   onInitialize,
   onCancel,
+  onRevoke,
 }: MCPCardActionsProps) {
   const localize = useLocalize();
 
@@ -53,9 +56,9 @@ export default function MCPCardActions({
   const buttonBaseClass = cn(
     'flex size-7 items-center justify-center rounded-md',
     'transition-colors duration-150',
-    'text-text-secondary hover:text-text-primary',
+    'text-text-secondary hover:text-text-secondary',
     'hover:bg-surface-tertiary',
-    'focus:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy',
+    'focus:outline-none focus-visible:ring-2 focus-visible:ring-text-primary',
   );
 
   // Loading state - show spinner (with cancel option)
@@ -89,7 +92,7 @@ export default function MCPCardActions({
           >
             <div className="relative size-4">
               <Spinner className="size-4 group-hover:opacity-0" />
-              <X className="absolute inset-0 size-4 text-red-500 opacity-0 group-hover:opacity-100" />
+              <X className="absolute inset-0 size-4 text-text-destructive opacity-0 group-hover:opacity-100" />
             </div>
           </TooltipAnchor>
         ) : (
@@ -122,7 +125,7 @@ export default function MCPCardActions({
       )}
 
       {/* Connect button - for disconnected or error states */}
-      {(isDisconnected || isError) && (
+      {(isDisconnected || isError) && !serverStatus?.requestScoped && (
         <TooltipAnchor
           description={localize('com_nav_mcp_connect')}
           side="top"
@@ -135,8 +138,9 @@ export default function MCPCardActions({
         </TooltipAnchor>
       )}
 
-      {/* Configure button - for connected servers with custom vars */}
-      {isConnected && hasCustomUserVars && (
+      {/* On-demand servers stay idle between requests, so their user variables
+          must remain configurable without a live transport connection. */}
+      {(isConnected || serverStatus?.requestScoped) && hasCustomUserVars && (
         <TooltipAnchor
           description={localize('com_ui_configure')}
           side="top"
@@ -150,7 +154,7 @@ export default function MCPCardActions({
       )}
 
       {/* Refresh button - for connected servers (allows reconnection) */}
-      {isConnected && (
+      {isConnected && !serverStatus?.requestScoped && (
         <TooltipAnchor
           description={localize('com_nav_mcp_reconnect')}
           side="top"
@@ -160,6 +164,20 @@ export default function MCPCardActions({
           onClick={() => onInitialize()}
         >
           <RefreshCw className="size-3.5" aria-hidden="true" />
+        </TooltipAnchor>
+      )}
+
+      {/* Revoke button - for OAuth servers (available regardless of connection state) */}
+      {serverStatus?.requiresOAuth && onRevoke && (
+        <TooltipAnchor
+          description={localize('com_ui_revoke')}
+          side="top"
+          className={buttonBaseClass}
+          aria-label={localize('com_ui_revoke')}
+          role="button"
+          onClick={onRevoke}
+        >
+          <Trash2 className="size-3.5 text-text-destructive" aria-hidden="true" />
         </TooltipAnchor>
       )}
     </div>

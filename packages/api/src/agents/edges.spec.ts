@@ -1,7 +1,58 @@
 import type { GraphEdge } from 'librechat-data-provider';
-import { getEdgeKey, getEdgeParticipants, filterOrphanedEdges, createEdgeCollector } from './edges';
+import {
+  getEdgeKey,
+  getEdgeParticipants,
+  collectEdgeAgentIds,
+  replaceEdgeSourceId,
+  filterOrphanedEdges,
+  createEdgeCollector,
+} from './edges';
 
 describe('edges utilities', () => {
+  describe('replaceEdgeSourceId', () => {
+    it('should assign a newly created agent id to placeholder sources', () => {
+      const edges: GraphEdge[] = [
+        { from: '', to: 'agent_target', edgeType: 'handoff' },
+        { from: 'agent_other', to: 'agent_target', edgeType: 'handoff' },
+      ];
+
+      expect(replaceEdgeSourceId(edges, '', 'agent_router')).toEqual([
+        { from: 'agent_router', to: 'agent_target', edgeType: 'handoff' },
+        { from: 'agent_other', to: 'agent_target', edgeType: 'handoff' },
+      ]);
+    });
+
+    it('should rewrite copied agent ids inside multi-source edges', () => {
+      const edges: GraphEdge[] = [
+        {
+          from: ['agent_original', 'agent_peer'],
+          to: 'agent_target',
+          edgeType: 'handoff',
+        },
+      ];
+
+      expect(replaceEdgeSourceId(edges, 'agent_original', 'agent_clone')).toEqual([
+        {
+          from: ['agent_clone', 'agent_peer'],
+          to: 'agent_target',
+          edgeType: 'handoff',
+        },
+      ]);
+    });
+
+    it('should preserve untouched edge references', () => {
+      const edge: GraphEdge = {
+        from: 'agent_other',
+        to: 'agent_target',
+        edgeType: 'handoff',
+      };
+
+      const result = replaceEdgeSourceId([edge], 'agent_original', 'agent_clone');
+
+      expect(result?.[0]).toBe(edge);
+    });
+  });
+
   describe('getEdgeKey', () => {
     it('should create key from simple string from/to', () => {
       const edge: GraphEdge = { from: 'agent_a', to: 'agent_b', edgeType: 'handoff' };
@@ -70,6 +121,49 @@ describe('edges utilities', () => {
     });
   });
 
+  describe('collectEdgeAgentIds', () => {
+    it('should return empty set for undefined input', () => {
+      expect(collectEdgeAgentIds(undefined)).toEqual(new Set());
+    });
+
+    it('should return empty set for empty array', () => {
+      expect(collectEdgeAgentIds([])).toEqual(new Set());
+    });
+
+    it('should collect IDs from simple string from/to', () => {
+      const edges: GraphEdge[] = [{ from: 'agent_a', to: 'agent_b', edgeType: 'handoff' }];
+      expect(collectEdgeAgentIds(edges)).toEqual(new Set(['agent_a', 'agent_b']));
+    });
+
+    it('should collect IDs from array from/to values', () => {
+      const edges: GraphEdge[] = [
+        { from: ['agent_a', 'agent_b'], to: ['agent_c', 'agent_d'], edgeType: 'handoff' },
+      ];
+      expect(collectEdgeAgentIds(edges)).toEqual(
+        new Set(['agent_a', 'agent_b', 'agent_c', 'agent_d']),
+      );
+    });
+
+    it('should deduplicate IDs across edges', () => {
+      const edges: GraphEdge[] = [
+        { from: 'agent_a', to: 'agent_b', edgeType: 'handoff' },
+        { from: 'agent_b', to: 'agent_c', edgeType: 'handoff' },
+        { from: 'agent_a', to: 'agent_c', edgeType: 'direct' },
+      ];
+      expect(collectEdgeAgentIds(edges)).toEqual(new Set(['agent_a', 'agent_b', 'agent_c']));
+    });
+
+    it('should handle mixed scalar and array edges', () => {
+      const edges: GraphEdge[] = [
+        { from: 'agent_a', to: ['agent_b', 'agent_c'], edgeType: 'handoff' },
+        { from: ['agent_c', 'agent_d'], to: 'agent_e', edgeType: 'direct' },
+      ];
+      expect(collectEdgeAgentIds(edges)).toEqual(
+        new Set(['agent_a', 'agent_b', 'agent_c', 'agent_d', 'agent_e']),
+      );
+    });
+  });
+
   describe('filterOrphanedEdges', () => {
     const edges: GraphEdge[] = [
       { from: 'agent_a', to: 'agent_b', edgeType: 'handoff' },
@@ -82,36 +176,66 @@ describe('edges utilities', () => {
       expect(filterOrphanedEdges(edges, skipped)).toEqual(edges);
     });
 
-    it('should filter out edges with orphaned to targets', () => {
+    it('should filter out edges with orphaned to targets and orphaned from sources', () => {
       const skipped = new Set(['agent_b']);
       const result = filterOrphanedEdges(edges, skipped);
-      // Only filters edges where `to` is in skipped set
       // agent_a -> agent_b (filtered - to=agent_b is skipped)
-      // agent_a -> agent_c (kept - to=agent_c not skipped)
-      // agent_b -> agent_d (kept - to=agent_d not skipped, from is not checked)
-      expect(result).toHaveLength(2);
-      expect(result.map((e) => e.to)).toEqual(['agent_c', 'agent_d']);
+      // agent_a -> agent_c (kept - neither endpoint skipped)
+      // agent_b -> agent_d (filtered - from=agent_b is skipped; a source-side
+      // orphan would otherwise leave the graph referencing an absent agent)
+      expect(result).toHaveLength(1);
+      expect(result[0].to).toBe('agent_c');
     });
 
     it('should filter out multiple orphaned edges', () => {
       const skipped = new Set(['agent_b', 'agent_c']);
       const result = filterOrphanedEdges(edges, skipped);
-      // agent_a -> agent_b (filtered)
-      // agent_a -> agent_c (filtered)
-      // agent_b -> agent_d (kept - to=agent_d not skipped)
-      expect(result).toHaveLength(1);
-      expect(result[0].to).toBe('agent_d');
+      // agent_a -> agent_b (filtered, to)
+      // agent_a -> agent_c (filtered, to)
+      // agent_b -> agent_d (filtered, from)
+      expect(result).toHaveLength(0);
     });
 
-    it('should handle array to values', () => {
+    it('strips skipped co-sources from multi-source edges instead of dropping the whole edge', () => {
+      // The SDK adds one `builder.addEdge(source, dest)` per source, so
+      // `agent_a -> agent_d` is a valid route even when `agent_b` can't
+      // be loaded. Keep the edge with the surviving sources.
+      const edgesWithArrayFrom: GraphEdge[] = [
+        { from: ['agent_a', 'agent_b'], to: 'agent_d', edgeType: 'handoff' },
+        { from: 'agent_a', to: 'agent_d', edgeType: 'handoff' },
+      ];
+      const skipped = new Set(['agent_b']);
+      const result = filterOrphanedEdges(edgesWithArrayFrom, skipped);
+      expect(result).toHaveLength(2);
+      expect(result[0].from).toEqual(['agent_a']);
+      expect(result[0].to).toBe('agent_d');
+      expect(result[1].from).toBe('agent_a');
+    });
+
+    it('strips skipped co-destinations from multi-destination edges', () => {
       const edgesWithArray: GraphEdge[] = [
         { from: 'agent_a', to: ['agent_b', 'agent_c'], edgeType: 'handoff' },
         { from: 'agent_a', to: ['agent_d'], edgeType: 'handoff' },
       ];
       const skipped = new Set(['agent_b']);
       const result = filterOrphanedEdges(edgesWithArray, skipped);
-      expect(result).toHaveLength(1);
-      expect(result[0].to).toEqual(['agent_d']);
+      // First edge: `['agent_b','agent_c']` → `['agent_c']` — kept.
+      // Second edge: unchanged.
+      expect(result).toHaveLength(2);
+      expect(result[0].to).toEqual(['agent_c']);
+      expect(result[1].to).toEqual(['agent_d']);
+    });
+
+    it('drops multi-member edges only when every member on a side is skipped', () => {
+      const edgesSide: GraphEdge[] = [
+        // All sources skipped → drop.
+        { from: ['agent_b', 'agent_c'], to: 'agent_a', edgeType: 'handoff' },
+        // All destinations skipped → drop.
+        { from: 'agent_a', to: ['agent_b', 'agent_c'], edgeType: 'handoff' },
+      ];
+      const skipped = new Set(['agent_b', 'agent_c']);
+      const result = filterOrphanedEdges(edgesSide, skipped);
+      expect(result).toHaveLength(0);
     });
 
     it('should return original edges array when edges is null/undefined', () => {

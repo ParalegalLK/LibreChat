@@ -9,6 +9,7 @@ export interface IToken extends Document {
   createdAt: Date;
   expiresAt: Date;
   metadata?: Map<string, unknown>;
+  tenantId?: string;
 }
 
 export interface TokenCreateData {
@@ -18,14 +19,17 @@ export interface TokenCreateData {
   identifier?: string;
   token: string;
   expiresIn: number;
-  metadata?: Map<string, unknown>;
+  metadata?: Record<string, unknown> | Map<string, unknown>;
 }
 
 export interface TokenQuery {
   userId?: Types.ObjectId | string;
   token?: string;
-  email?: string;
-  identifier?: string;
+  email?: string | null;
+  type?: string | null;
+  identifier?: string | RegExp | null;
+  /** Internal optimistic-concurrency selector for OAuth token record generations. */
+  metadataCredentialSetId?: string | null;
 }
 
 export interface TokenUpdateData {
@@ -35,7 +39,7 @@ export interface TokenUpdateData {
   token?: string;
   expiresAt?: Date;
   expiresIn?: number;
-  metadata?: Map<string, unknown>;
+  metadata?: Record<string, unknown> | Map<string, unknown>;
 }
 
 export interface TokenDeleteResult {

@@ -1,15 +1,23 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
 import { RecoilRoot } from 'recoil';
+import { render, screen } from '@testing-library/react';
+import {
+  useMessageContext,
+  useOptionalMessagesConversation,
+  useOptionalMessagesOperations,
+} from '~/Providers';
 import { MCPUIResource } from '../MCPUIResource';
-import { useMessageContext, useMessagesConversation, useMessagesOperations } from '~/Providers';
-import { useLocalize } from '~/hooks';
 import { handleUIAction } from '~/utils';
+import { useLocalize } from '~/hooks';
 
 // Mock dependencies
-jest.mock('~/Providers');
-jest.mock('~/hooks');
-jest.mock('~/utils');
+jest.mock('~/Providers', () => ({
+  useMessageContext: jest.fn(),
+  useOptionalMessagesConversation: jest.fn(),
+  useOptionalMessagesOperations: jest.fn(),
+}));
+jest.mock('~/hooks', () => ({ useLocalize: jest.fn() }));
+jest.mock('~/utils', () => ({ handleUIAction: jest.fn() }));
 
 jest.mock('@mcp-ui/client', () => ({
   UIResourceRenderer: ({ resource, onUIAction }: any) => (
@@ -22,11 +30,11 @@ jest.mock('@mcp-ui/client', () => ({
 }));
 
 const mockUseMessageContext = useMessageContext as jest.MockedFunction<typeof useMessageContext>;
-const mockUseMessagesConversation = useMessagesConversation as jest.MockedFunction<
-  typeof useMessagesConversation
+const mockUseMessagesConversation = useOptionalMessagesConversation as jest.MockedFunction<
+  typeof useOptionalMessagesConversation
 >;
-const mockUseMessagesOperations = useMessagesOperations as jest.MockedFunction<
-  typeof useMessagesOperations
+const mockUseMessagesOperations = useOptionalMessagesOperations as jest.MockedFunction<
+  typeof useOptionalMessagesOperations
 >;
 const mockUseLocalize = useLocalize as jest.MockedFunction<typeof useLocalize>;
 const mockHandleUIAction = handleUIAction as jest.MockedFunction<typeof handleUIAction>;
@@ -135,6 +143,34 @@ describe('MCPUIResource', () => {
       renderWithRecoil(<MCPUIResource node={{ properties: { resourceId: 'resource-1' } }} />);
 
       expect(screen.getByText('UI resource resource-1 not found')).toBeInTheDocument();
+    });
+
+    it('should omit a referenced resource with an unsupported MIME type', () => {
+      currentTestMessages = [
+        {
+          messageId: 'msg123',
+          attachments: [
+            {
+              type: 'ui_resources',
+              ui_resources: [
+                {
+                  resourceId: 'blocked-resource',
+                  uri: 'ui://test/blocked',
+                  mimeType: 'application/vnd.mcp-ui.remote-dom+javascript',
+                  text: 'malicious script',
+                },
+              ],
+            },
+          ],
+        },
+      ];
+
+      const { container } = renderWithRecoil(
+        <MCPUIResource node={{ properties: { resourceId: 'blocked-resource' } }} />,
+      );
+
+      expect(container.firstChild).toBeNull();
+      expect(screen.queryByTestId('ui-resource-renderer')).not.toBeInTheDocument();
     });
 
     it('should resolve resources by resourceId across conversation messages', () => {

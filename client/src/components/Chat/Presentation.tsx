@@ -1,25 +1,74 @@
-import { useRecoilValue } from 'recoil';
-import { useEffect, useMemo } from 'react';
-import { FileSources, LocalStorageKeys } from 'librechat-data-provider';
+import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
+import { useRecoilValue, useResetRecoilState } from 'recoil';
+import { EModelEndpoint, FileSources, LocalStorageKeys } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
-import { useDeleteFilesMutation } from '~/data-provider';
+import useResetArtifactsOnConversationChange from '~/hooks/Artifacts/useResetArtifactsOnConversationChange';
+import { ParentSubagentsProvider } from '~/components/Chat/Subagents/ParentSubagentsProvider';
 import DragDropWrapper from '~/components/Chat/Input/Files/DragDropWrapper';
-import { EditorProvider, SidePanelProvider, ArtifactsProvider } from '~/Providers';
-import Artifacts from '~/components/Artifacts/Artifacts';
+import { EditorProvider, ArtifactsProvider } from '~/Providers';
+import { useDeleteFilesMutation } from '~/data-provider';
 import { SidePanelGroup } from '~/components/SidePanel';
+import { activeSubagentPanel } from '~/store/subagents';
 import { useSetFilesToDelete } from '~/hooks';
+import { failedFileIdsFrom } from '~/utils';
 import store from '~/store';
+
+const Artifacts = lazy(() => import('~/components/Artifacts/Artifacts'));
+const SubagentThreadPanel = lazy(() => import('~/components/Chat/Subagents/SubagentThreadPanel'));
 
 export default function Presentation({ children }: { children: React.ReactNode }) {
   const artifacts = useRecoilValue(store.artifactsState);
   const artifactsVisibility = useRecoilValue(store.artifactsVisibility);
+  // Render-gating the panel on `currentArtifactId != null` (in addition
+  // to visibility + non-empty artifacts) means the side panel only opens
+  // when *something* is actively focused. Conversation navigation
+  // resets `currentArtifactId` to null, so the panel stays closed when
+  // a user revisits an old conversation full of artifacts. New artifacts
+  // arriving via SSE auto-focus through `ToolArtifactCard`'s mount effect
+  // (gated on `isSubmitting`), restoring the legacy streaming UX.
+  const currentArtifactId = useRecoilValue(store.currentArtifactId);
+  const conversationId = useRecoilValue(store.conversationIdByIndex(0));
+  const conversationEndpoint = useRecoilValue(store.effectiveEndpointByIndex(0));
+  const conversationAgentId = useRecoilValue(store.conversationAgentIdByIndex(0));
+  const selectedSubagent = useRecoilValue(activeSubagentPanel);
+  const resetSelectedSubagent = useResetRecoilState(activeSubagentPanel);
+  const previousConversationIdRef = useRef<string | null>(null);
+
+  useResetArtifactsOnConversationChange();
+
+  useEffect(() => {
+    const previous = previousConversationIdRef.current;
+    const next = conversationId ?? null;
+    previousConversationIdRef.current = next;
+    if (previous != null && previous !== next) resetSelectedSubagent();
+  }, [conversationId, resetSelectedSubagent]);
 
   const setFilesToDelete = useSetFilesToDelete();
 
   const { mutateAsync } = useDeleteFilesMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       console.log('Temporary Files deleted');
-      setFilesToDelete({});
+      const failed = new Set(failedFileIdsFrom(result));
+      if (failed.size === 0) {
+        setFilesToDelete({});
+        return;
+      }
+      try {
+        const filesToDelete = localStorage.getItem(LocalStorageKeys.FILES_TO_DELETE);
+        const map = JSON.parse(filesToDelete ?? '{}') as Record<string, ExtendedFile>;
+        const remaining: Record<string, ExtendedFile> = {};
+        for (const [key, file] of Object.entries(map)) {
+          if (
+            (file.file_id != null && failed.has(file.file_id)) ||
+            (file.temp_file_id != null && failed.has(file.temp_file_id))
+          ) {
+            remaining[key] = file;
+          }
+        }
+        setFilesToDelete(remaining);
+      } catch {
+        // Keep existing records if reading or parsing fails.
+      }
     },
     onError: (error) => {
       console.log('Error deleting temporary files:', error);
@@ -47,47 +96,58 @@ export default function Presentation({ children }: { children: React.ReactNode }
     mutateAsync({ files });
   }, [mutateAsync]);
 
-  const defaultLayout = useMemo(() => {
-    const resizableLayout = localStorage.getItem('react-resizable-panels:layout');
-    return typeof resizableLayout === 'string' ? JSON.parse(resizableLayout) : undefined;
-  }, []);
-  const defaultCollapsed = useMemo(() => {
-    const collapsedPanels = localStorage.getItem('react-resizable-panels:collapsed');
-    return typeof collapsedPanels === 'string' ? JSON.parse(collapsedPanels) : true;
-  }, []);
-  const fullCollapse = useMemo(() => localStorage.getItem('fullPanelCollapse') === 'true', []);
-
-  /**
-   * Memoize artifacts JSX to prevent recreating it on every render
-   * This is critical for performance - prevents entire artifact tree from re-rendering
-   */
   const artifactsElement = useMemo(() => {
-    if (artifactsVisibility === true && Object.keys(artifacts ?? {}).length > 0) {
+    if (
+      artifactsVisibility === true &&
+      currentArtifactId != null &&
+      Object.keys(artifacts ?? {}).length > 0
+    ) {
       return (
         <ArtifactsProvider>
           <EditorProvider>
-            <Artifacts />
+            <Suspense fallback={null}>
+              <Artifacts />
+            </Suspense>
           </EditorProvider>
         </ArtifactsProvider>
       );
     }
     return null;
-  }, [artifactsVisibility, artifacts]);
+  }, [artifactsVisibility, artifacts, currentArtifactId]);
+
+  useEffect(() => {
+    if (artifactsElement != null && selectedSubagent != null) resetSelectedSubagent();
+  }, [artifactsElement, resetSelectedSubagent, selectedSubagent]);
+
+  const subagentElement = useMemo(() => {
+    if (
+      selectedSubagent == null ||
+      selectedSubagent.host !== 'conversation' ||
+      selectedSubagent.parentConversationId !== conversationId
+    ) {
+      return null;
+    }
+    return (
+      <Suspense fallback={null}>
+        <SubagentThreadPanel selection={selectedSubagent} />
+      </Suspense>
+    );
+  }, [conversationId, selectedSubagent]);
+
+  const panelElement = artifactsElement ?? subagentElement;
 
   return (
     <DragDropWrapper className="relative flex w-full grow overflow-hidden bg-presentation">
-      <SidePanelProvider>
-        <SidePanelGroup
-          defaultLayout={defaultLayout}
-          fullPanelCollapse={fullCollapse}
-          defaultCollapsed={defaultCollapsed}
-          artifacts={artifactsElement}
-        >
+      <ParentSubagentsProvider
+        conversationId={conversationId ?? ''}
+        enabled={conversationEndpoint === EModelEndpoint.agents && conversationAgentId != null}
+      >
+        <SidePanelGroup panel={panelElement}>
           <main className="flex h-full flex-col overflow-y-auto" role="main">
             {children}
           </main>
         </SidePanelGroup>
-      </SidePanelProvider>
+      </ParentSubagentsProvider>
     </DragDropWrapper>
   );
 }

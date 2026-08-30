@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { EndpointFileConfig, FileConfig } from './types/files';
+import type { EndpointFileConfig, FileConfig, RegexLike } from './types/files';
 import { EModelEndpoint, isAgentsEndpoint, isDocumentSupportedProvider } from './schemas';
 import { normalizeEndpointName } from './utils';
 
@@ -39,12 +39,14 @@ export const fullMimeTypesList = [
   'application/pdf',
   'text/x-php',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.presentationml.template',
   'text/x-python',
   'text/x-script.python',
   'text/x-ruby',
   'text/x-tex',
   'text/plain',
   'text/css',
+  'text/calendar',
   'text/vtt',
   'image/jpeg',
   'text/javascript',
@@ -60,8 +62,15 @@ export const fullMimeTypesList = [
   'application/vnd.coffeescript',
   'application/xml',
   'application/zip',
+  'application/x-zip-compressed',
+  'application/x-parquet',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/vnd.oasis.opendocument.graphics',
   'image/svg',
   'image/svg+xml',
+  'message/rfc822',
   // Video formats
   'video/mp4',
   'video/avi',
@@ -98,12 +107,14 @@ export const codeInterpreterMimeTypesList = [
   'application/pdf',
   'text/x-php',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.presentationml.template',
   'text/x-python',
   'text/x-script.python',
   'text/x-ruby',
   'text/x-tex',
   'text/plain',
   'text/css',
+  'text/calendar',
   'image/jpeg',
   'text/javascript',
   'image/gif',
@@ -114,6 +125,8 @@ export const codeInterpreterMimeTypesList = [
   'application/typescript',
   'application/xml',
   'application/zip',
+  'application/x-zip-compressed',
+  'application/x-parquet',
   ...excelFileTypes,
 ];
 
@@ -128,6 +141,7 @@ export const retrievalMimeTypesList = [
   'application/pdf',
   'text/x-php',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.presentationml.template',
   'text/x-python',
   'text/x-script.python',
   'text/x-ruby',
@@ -137,14 +151,76 @@ export const retrievalMimeTypesList = [
 
 export const imageExtRegex = /\.(jpg|jpeg|png|gif|webp|heic|heif)$/i;
 
+/** @see https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html */
+export type BedrockDocumentFormat =
+  | 'pdf'
+  | 'csv'
+  | 'doc'
+  | 'docx'
+  | 'xls'
+  | 'xlsx'
+  | 'html'
+  | 'txt'
+  | 'md';
+
+/** Maps MIME types to Bedrock Converse API document format values */
+export const bedrockDocumentFormats: Record<string, BedrockDocumentFormat> = {
+  'application/pdf': 'pdf',
+  'text/csv': 'csv',
+  'application/csv': 'csv',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'text/html': 'html',
+  'text/plain': 'txt',
+  'text/markdown': 'md',
+};
+
+export const isBedrockDocumentType = (mimeType?: string): boolean =>
+  mimeType != null && mimeType in bedrockDocumentFormats;
+
+/** MIME types Bedrock's Converse document path can send to the model (mirrors `bedrockDocumentFormats`). */
+export const bedrockDocumentMimeTypes: readonly string[] = Object.keys(bedrockDocumentFormats);
+
+/** File extensions accepted by Bedrock document uploads (for input accept attributes) */
+export const bedrockDocumentExtensions =
+  '.pdf,.csv,.doc,.docx,.xls,.xlsx,.html,.htm,.txt,.md,application/pdf,text/csv,application/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/html,text/plain,text/markdown';
+
+/** Textual `application/*` MIME types that can be decoded and sent as plain text */
+const textualApplicationTypes = new Set([
+  'application/json',
+  'application/xml',
+  'application/yaml',
+  'application/sql',
+  'application/typescript',
+  'application/x-sh',
+  'application/csv',
+]);
+
+/**
+ * MIME types the Anthropic Messages API accepts as a plain-text document source
+ * (`source.type: 'text'`)
+ */
+export const isAnthropicTextDocumentType = (mimeType?: string): boolean =>
+  mimeType != null && (mimeType.startsWith('text/') || textualApplicationTypes.has(mimeType));
+
+/**
+ * MIME types the Anthropic Messages API document path can send to the model
+ * (mirrors `isBedrockDocumentType`): PDF via base64, textual types via a
+ * plain-text document source. All other types are rejected with a provider 400.
+ */
+export const isAnthropicDocumentType = (mimeType?: string): boolean =>
+  mimeType === 'application/pdf' || isAnthropicTextDocumentType(mimeType);
+
 export const excelMimeTypes =
   /^application\/(vnd\.ms-excel|msexcel|x-msexcel|x-ms-excel|x-excel|x-dos_ms_excel|xls|x-xls|vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet)$/;
 
 export const textMimeTypes =
-  /^(text\/(x-c|x-csharp|tab-separated-values|x-c\+\+|x-h|x-java|html|markdown|x-php|x-python|x-script\.python|x-ruby|x-tex|plain|css|vtt|javascript|csv|xml))$/;
+  /^(text\/(x-c|x-csharp|tab-separated-values|x-c\+\+|x-h|x-java|html|markdown|x-php|x-python|x-script\.python|x-ruby|x-tex|plain|css|vtt|javascript|csv|xml|calendar))$/;
 
 export const applicationMimeTypes =
-  /^(application\/(epub\+zip|csv|json|pdf|x-tar|x-sh|typescript|sql|yaml|vnd\.coffeescript|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation|spreadsheetml\.sheet)|xml|zip))$/;
+  /^(application\/(epub\+zip|csv|json|msword|pdf|x-tar|x-sh|x-zip-compressed|typescript|sql|yaml|x-parquet|vnd\.apache\.parquet|vnd\.coffeescript|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.(presentation|template)|spreadsheetml\.sheet)|vnd\.oasis\.opendocument\.(text|spreadsheet|presentation|graphics)|xml|zip))$/;
 
 export const imageMimeTypes = /^image\/(jpeg|gif|png|webp|heic|heif)$/;
 
@@ -155,10 +231,22 @@ export const videoMimeTypes = /^video\/(mp4|avi|mov|wmv|flv|webm|mkv|m4v|3gp|ogv
 
 export const defaultOCRMimeTypes = [
   imageMimeTypes,
+  excelMimeTypes,
   /^application\/pdf$/,
-  /^application\/vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation|spreadsheetml\.sheet)$/,
-  /^application\/vnd\.ms-(word|powerpoint|excel)$/,
+  /^application\/vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation)$/,
+  /^application\/vnd\.openxmlformats-officedocument\.presentationml\.template$/,
+  /^application\/vnd\.ms-(word|powerpoint)$/,
   /^application\/epub\+zip$/,
+  /^application\/vnd\.oasis\.opendocument\.(text|spreadsheet|presentation|graphics)$/,
+];
+
+/** MIME types handled by the built-in document parser (pdf, docx, excel variants, ods/odt) */
+export const documentParserMimeTypes = [
+  excelMimeTypes,
+  /^application\/pdf$/,
+  /^application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document$/,
+  /^application\/vnd\.oasis\.opendocument\.spreadsheet$/,
+  /^application\/vnd\.oasis\.opendocument\.text$/,
 ];
 
 export const defaultTextMimeTypes = [/^[\w.-]+\/[\w.-]+$/];
@@ -174,6 +262,8 @@ export const supportedMimeTypes = [
   audioMimeTypes,
   /** Supported by LC Code Interpreter API */
   /^image\/(svg|svg\+xml)$/,
+  /** .eml email files */
+  /^message\/rfc822$/,
 ];
 
 export const codeInterpreterMimeTypes = [
@@ -193,13 +283,22 @@ export const codeTypeMapping: { [key: string]: string } = {
   py: 'text/x-python', // .py - Python source
   rb: 'text/x-ruby', // .rb - Ruby source
   tex: 'text/x-tex', // .tex - LaTeX source
+  java: 'text/x-java', // .java - Java source
   js: 'text/javascript', // .js - JavaScript source
   sh: 'application/x-sh', // .sh - Shell script
   ts: 'application/typescript', // .ts - TypeScript source
   tar: 'application/x-tar', // .tar - Tar archive
   zip: 'application/zip', // .zip - ZIP archive
+  txt: 'text/plain', // .txt - Plain text file
   log: 'text/plain', // .log - Log file
+  csv: 'text/csv', // .csv - Comma-separated values
   tsv: 'text/tab-separated-values', // .tsv - Tab-separated values
+  parquet: 'application/x-parquet', // .parquet - Apache Parquet columnar storage
+  json: 'application/json', // .json - JSON file
+  xml: 'application/xml', // .xml - XML file
+  html: 'text/html', // .html - HTML file
+  htm: 'text/html', // .htm - HTML file
+  css: 'text/css', // .css - CSS file
   yml: 'application/yaml', // .yml - YAML
   yaml: 'application/yaml', // .yaml - YAML
   sql: 'application/sql', // .sql - SQL (IANA registered)
@@ -221,6 +320,7 @@ export const codeTypeMapping: { [key: string]: string } = {
   cljs: 'text/plain', // .cljs - ClojureScript source
   cljc: 'text/plain', // .cljc - Clojure common source
   elm: 'text/plain', // .elm - Elm source
+  eml: 'message/rfc822', // .eml - Email message (RFC 822)
   erl: 'text/plain', // .erl - Erlang source
   hrl: 'text/plain', // .hrl - Erlang header
   ex: 'text/plain', // .ex - Elixir source
@@ -288,6 +388,21 @@ export const codeTypeMapping: { [key: string]: string } = {
   tcl: 'text/plain', // .tcl - Tcl source
   awk: 'text/plain', // .awk - AWK script
   sed: 'text/plain', // .sed - Sed script
+  odt: 'application/vnd.oasis.opendocument.text', // .odt - OpenDocument Text
+  ods: 'application/vnd.oasis.opendocument.spreadsheet', // .ods - OpenDocument Spreadsheet
+  odp: 'application/vnd.oasis.opendocument.presentation', // .odp - OpenDocument Presentation
+  odg: 'application/vnd.oasis.opendocument.graphics', // .odg - OpenDocument Graphics
+  doc: 'application/msword', // .doc - Word (legacy)
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx - Word
+  xls: 'application/vnd.ms-excel', // .xls - Excel (legacy)
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx - Excel
+  ppt: 'application/vnd.ms-powerpoint', // .ppt - PowerPoint (legacy)
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', // .pptx - PowerPoint
+  potx: 'application/vnd.openxmlformats-officedocument.presentationml.template', // .potx - PowerPoint template
+  ics: 'text/calendar', // .ics - iCalendar
+  ical: 'text/calendar', // .ical - iCalendar
+  ifb: 'text/calendar', // .ifb - iCalendar free/busy
+  icalendar: 'text/calendar', // .icalendar - iCalendar
 };
 
 /** Maps image extensions to MIME types for formats browsers may not recognize */
@@ -296,15 +411,27 @@ export const imageTypeMapping: { [key: string]: string } = {
   heif: 'image/heif',
 };
 
+/** Normalizes non-standard MIME types that browsers may report to their canonical forms */
+export const mimeTypeAliases: Readonly<Record<string, string>> = {
+  'application/x-zip-compressed': 'application/zip',
+  'text/x-python-script': 'text/x-python',
+  'text/x-markdown': 'text/markdown',
+  /** freedesktop shared-mime-info (Chrome on Linux) */
+  'application/x-shellscript': 'application/x-sh',
+  /** libmagic, i.e. `file --mime-type` */
+  'text/x-shellscript': 'application/x-sh',
+};
+
 /**
- * Infers the MIME type from a file's extension when the browser doesn't recognize it
- * @param fileName - The name of the file including extension
- * @param currentType - The current MIME type reported by the browser (may be empty)
- * @returns The inferred MIME type if browser didn't provide one, otherwise the original type
+ * Infers the MIME type from a file's extension when the browser doesn't recognize it,
+ * and normalizes known non-standard MIME type aliases to their canonical forms.
+ * @param fileName - The file name including its extension
+ * @param currentType - The MIME type reported by the browser (may be empty string)
+ * @returns The normalized or inferred MIME type; empty string if unresolvable
  */
 export function inferMimeType(fileName: string, currentType: string): string {
   if (currentType) {
-    return currentType;
+    return mimeTypeAliases[currentType] ?? currentType;
   }
 
   const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
@@ -313,7 +440,7 @@ export function inferMimeType(fileName: string, currentType: string): string {
 
 export const retrievalMimeTypes = [
   /^(text\/(x-c|x-c\+\+|x-h|html|x-java|markdown|x-php|x-python|x-script\.python|x-ruby|x-tex|plain|vtt|xml))$/,
-  /^(application\/(json|pdf|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation)))$/,
+  /^(application\/(json|pdf|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.(presentation|template))))$/,
 ];
 
 export const megabyte = 1024 * 1024;
@@ -321,6 +448,7 @@ export const megabyte = 1024 * 1024;
 export const mbToBytes = (mb: number): number => mb * megabyte;
 
 const defaultSizeLimit = mbToBytes(512);
+const defaultSkillImportSizeLimit = mbToBytes(50);
 const defaultTokenLimit = 100000;
 const assistantsFileConfig = {
   fileLimit: 10,
@@ -350,6 +478,9 @@ export const fileConfig = {
       disabled: false,
     },
   },
+  skills: {
+    fileSizeLimit: defaultSkillImportSizeLimit,
+  },
   serverFileSizeLimit: defaultSizeLimit,
   avatarSizeLimit: mbToBytes(2),
   fileTokenLimit: defaultTokenLimit,
@@ -358,6 +489,7 @@ export const fileConfig = {
     maxWidth: 1900,
     maxHeight: 1900,
     quality: 0.92,
+    enforced: false,
   },
   ocr: {
     supportedMimeTypes: defaultOCRMimeTypes,
@@ -368,27 +500,12 @@ export const fileConfig = {
   stt: {
     supportedMimeTypes: defaultSTTMimeTypes,
   },
-  checkType: function (fileType: string, supportedTypes: RegExp[] = supportedMimeTypes) {
+  checkType: function (fileType: string, supportedTypes: RegexLike[] = supportedMimeTypes) {
     return supportedTypes.some((regex) => regex.test(fileType));
   },
 };
 
-const supportedMimeTypesSchema = z
-  .array(z.any())
-  .optional()
-  .refine(
-    (mimeTypes) => {
-      if (!mimeTypes) {
-        return true;
-      }
-      return mimeTypes.every(
-        (mimeType) => mimeType instanceof RegExp || typeof mimeType === 'string',
-      );
-    },
-    {
-      message: 'Each mimeType must be a string or a RegExp object.',
-    },
-  );
+const supportedMimeTypesSchema = z.array(z.string()).optional();
 
 export const endpointFileConfigSchema = z.object({
   disabled: z.boolean().optional(),
@@ -398,8 +515,13 @@ export const endpointFileConfigSchema = z.object({
   supportedMimeTypes: supportedMimeTypesSchema.optional(),
 });
 
+const skillFileConfigSchema = z.object({
+  fileSizeLimit: z.number().min(0).optional(),
+});
+
 export const fileConfigSchema = z.object({
   endpoints: z.record(endpointFileConfigSchema).optional(),
+  skills: skillFileConfigSchema.optional(),
   serverFileSizeLimit: z.number().min(0).optional(),
   avatarSizeLimit: z.number().min(0).optional(),
   fileTokenLimit: z.number().min(0).optional(),
@@ -412,8 +534,8 @@ export const fileConfigSchema = z.object({
   clientImageResize: z
     .object({
       enabled: z.boolean().optional(),
-      maxWidth: z.number().min(0).optional(),
-      maxHeight: z.number().min(0).optional(),
+      maxWidth: z.number().min(1).optional(),
+      maxHeight: z.number().min(1).optional(),
       quality: z.number().min(0).max(1).optional(),
     })
     .optional(),
@@ -431,17 +553,294 @@ export const fileConfigSchema = z.object({
 
 export type TFileConfig = z.infer<typeof fileConfigSchema>;
 
-/** Helper function to safely convert string patterns to RegExp objects */
-export const convertStringsToRegex = (patterns: string[]): RegExp[] =>
-  patterns.reduce((acc: RegExp[], pattern) => {
+/**
+ * Compiler for admin-supplied MIME patterns. Defaults to native `RegExp`, which browser
+ * builds keep so no extra dependency is bundled. The server swaps in a linear-time engine
+ * via `setFileConfigRegexCompiler` so an admin-authored catastrophic-backtracking pattern
+ * cannot ReDoS the shared event loop when tested against an uploaded file's MIME type.
+ */
+let compileMimeRegex: (pattern: string) => RegexLike = (pattern) => new RegExp(pattern);
+
+/** Override the MIME-pattern compiler; the server injects a linear-time engine at startup. */
+export const setFileConfigRegexCompiler = (compile: (pattern: string) => RegexLike): void => {
+  compileMimeRegex = compile;
+};
+
+/** Returned when every configured pattern fails to compile, so consumers that read an empty
+ *  allowlist as "no restriction" fail closed instead of allowing every file. */
+const rejectAllMimeMatcher: RegexLike = { test: () => false };
+
+/** Helper function to safely convert string patterns to matcher objects */
+export const convertStringsToRegex = (patterns: string[]): RegexLike[] => {
+  const compiled = patterns.reduce((acc: RegexLike[], pattern) => {
     try {
-      const regex = new RegExp(pattern);
-      acc.push(regex);
+      acc.push(compileMimeRegex(pattern));
     } catch (error) {
       console.error(`Invalid regex pattern "${pattern}" skipped.`, error);
     }
     return acc;
-  }, []);
+  }, [] as RegexLike[]);
+  // Every configured pattern was dropped. Return an explicit reject-all matcher so consumers that
+  // read an empty allowlist as "no restriction" fail closed instead of allowing every file.
+  if (patterns.length > 0 && compiled.length === 0) {
+    console.error(
+      `All ${patterns.length} MIME type pattern(s) were invalid and skipped; the resulting allowlist rejects every file.`,
+    );
+    return [rejectAllMimeMatcher];
+  }
+  return compiled;
+};
+
+/** Detects whether the given MIME type patterns accept all file types (e.g., `.*` or `.+`). */
+export const isPermissiveMimeConfig = (types?: RegexLike[]): boolean => {
+  if (!types || types.length === 0) {
+    return false;
+  }
+  return types.some((regex) => regex.test('x-librechat/x-probe'));
+};
+
+/** The kind of content a provider upload path can actually send to the model. */
+export type MimeUploadCategory = 'image' | 'document' | 'audio' | 'video';
+
+/** Describes what an upload path can send, used to scope a configured allowlist to selectable files. */
+export interface MimeUploadCapability {
+  /** Content categories the path forwards to the model. */
+  categories: ReadonlyArray<MimeUploadCategory>;
+  /** When `document` is permitted, restrict document types to this set (e.g. Bedrock formats); default: all. */
+  documentMimeTypes?: readonly string[];
+}
+
+/** Media categories that collapse to a wildcard `accept` token when any member type is allowed. */
+const mimeAcceptCategories: ReadonlyArray<{
+  category: Exclude<MimeUploadCategory, 'document'>;
+  token: string;
+  samples: readonly string[];
+  extras?: readonly string[];
+}> = [
+  {
+    /** Mirrors `imageMimeTypes` (+ the code-interpreter svg variants) so every accepted type is known. */
+    category: 'image',
+    token: 'image/*',
+    samples: [
+      'image/jpeg',
+      'image/gif',
+      'image/png',
+      'image/webp',
+      'image/heic',
+      'image/heif',
+      'image/svg',
+      'image/svg+xml',
+    ],
+    extras: ['.heif', '.heic'],
+  },
+  {
+    /** Mirrors `audioMimeTypes`. */
+    category: 'audio',
+    token: 'audio/*',
+    samples: [
+      'audio/mp3',
+      'audio/mpeg',
+      'audio/mpeg3',
+      'audio/wav',
+      'audio/wave',
+      'audio/x-wav',
+      'audio/ogg',
+      'audio/vorbis',
+      'audio/mp4',
+      'audio/m4a',
+      'audio/x-m4a',
+      'audio/flac',
+      'audio/x-flac',
+      'audio/webm',
+      'audio/aac',
+      'audio/wma',
+      'audio/opus',
+    ],
+  },
+  {
+    /** Mirrors `videoMimeTypes`. */
+    category: 'video',
+    token: 'video/*',
+    samples: [
+      'video/mp4',
+      'video/avi',
+      'video/mov',
+      'video/wmv',
+      'video/flv',
+      'video/webm',
+      'video/mkv',
+      'video/m4v',
+      'video/3gp',
+      'video/ogv',
+    ],
+  },
+];
+
+/** Document/text MIME types paired with the extension(s) browsers filter on in the file picker. */
+const documentMimeExtensions: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['application/pdf', ['.pdf']],
+  ['application/msword', ['.doc']],
+  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', ['.docx']],
+  ['application/vnd.ms-excel', ['.xls']],
+  ['application/msexcel', ['.xls']],
+  ['application/x-msexcel', ['.xls']],
+  ['application/x-ms-excel', ['.xls']],
+  ['application/x-excel', ['.xls']],
+  ['application/x-dos_ms_excel', ['.xls']],
+  ['application/xls', ['.xls']],
+  ['application/x-xls', ['.xls']],
+  ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ['.xlsx']],
+  ['application/vnd.ms-powerpoint', ['.ppt']],
+  ['application/vnd.openxmlformats-officedocument.presentationml.presentation', ['.pptx']],
+  ['application/vnd.openxmlformats-officedocument.presentationml.template', ['.potx']],
+  ['application/vnd.oasis.opendocument.text', ['.odt']],
+  ['application/vnd.oasis.opendocument.spreadsheet', ['.ods']],
+  ['application/vnd.oasis.opendocument.presentation', ['.odp']],
+  ['application/vnd.oasis.opendocument.graphics', ['.odg']],
+  ['application/rtf', ['.rtf']],
+  ['application/json', ['.json']],
+  ['application/xml', ['.xml']],
+  ['application/yaml', ['.yaml', '.yml']],
+  ['application/zip', ['.zip']],
+  ['application/x-zip-compressed', ['.zip']],
+  ['application/epub+zip', ['.epub']],
+  ['application/x-parquet', ['.parquet']],
+  ['application/vnd.apache.parquet', ['.parquet']],
+  ['text/csv', ['.csv']],
+  ['application/csv', ['.csv']],
+  ['text/tab-separated-values', ['.tsv']],
+  ['text/plain', ['.txt']],
+  ['text/markdown', ['.md']],
+  ['text/html', ['.html', '.htm']],
+  ['text/calendar', ['.ics']],
+  ['message/rfc822', ['.eml']],
+];
+
+const documentMimeSet = new Set(documentMimeExtensions.map(([mimeType]) => mimeType));
+
+/** Every MIME type LibreChat may accept, used to detect patterns that reach beyond the representable set. */
+const knownMimeUniverse: readonly string[] = Array.from(
+  new Set<string>([
+    ...fullMimeTypesList,
+    ...documentMimeExtensions.map(([mimeType]) => mimeType),
+    ...mimeAcceptCategories.flatMap((category) => category.samples),
+  ]),
+);
+
+const categoryOf = (mimeType: string): MimeUploadCategory => {
+  if (mimeType.startsWith('image/')) {
+    return 'image';
+  }
+  if (mimeType.startsWith('audio/')) {
+    return 'audio';
+  }
+  if (mimeType.startsWith('video/')) {
+    return 'video';
+  }
+  return 'document';
+};
+
+/** Media types are covered by their `<cat>/*` wildcard token; document types need an explicit entry. */
+const isRepresentable = (mimeType: string): boolean =>
+  categoryOf(mimeType) !== 'document' || documentMimeSet.has(mimeType);
+
+/**
+ * Translates a finite MIME allowlist into a file-input `accept` string, intersected with what the
+ * provider upload path can actually send. Returns `undefined` (keep the provider filter) when a
+ * configured pattern matches a supported, path-handleable type that cannot be represented, so the
+ * picker never hides a file the path would have accepted.
+ */
+const buildMimeAccept = (
+  types: RegexLike[],
+  { categories, documentMimeTypes }: MimeUploadCapability,
+): string | undefined => {
+  const permittedSet = new Set<MimeUploadCategory>(categories);
+  const documentAllowSet = documentMimeTypes ? new Set(documentMimeTypes) : null;
+  const emittedMedia = new Set<MimeUploadCategory>();
+  const emittedDocuments = new Set<string>();
+
+  /** A pattern matching nothing known may still accept a supported type we can't represent; fall back. */
+  const everyPatternKnown = types.every((regex) =>
+    knownMimeUniverse.some((mimeType) => regex.test(mimeType)),
+  );
+  if (!everyPatternKnown) {
+    return undefined;
+  }
+
+  for (const regex of types) {
+    for (const mimeType of knownMimeUniverse) {
+      if (!regex.test(mimeType)) {
+        continue;
+      }
+      const category = categoryOf(mimeType);
+      if (!permittedSet.has(category)) {
+        continue;
+      }
+      /** The path handles documents but drops this specific type (e.g. Bedrock ignores pptx/ODF). */
+      if (category === 'document' && documentAllowSet && !documentAllowSet.has(mimeType)) {
+        continue;
+      }
+      if (!isRepresentable(mimeType)) {
+        return undefined;
+      }
+      if (category === 'document') {
+        emittedDocuments.add(mimeType);
+      } else {
+        emittedMedia.add(category);
+      }
+    }
+  }
+
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+  const push = (token: string): void => {
+    if (!seen.has(token)) {
+      seen.add(token);
+      tokens.push(token);
+    }
+  };
+
+  for (const category of mimeAcceptCategories) {
+    if (emittedMedia.has(category.category)) {
+      push(category.token);
+      category.extras?.forEach(push);
+    }
+  }
+
+  for (const [mimeType, extensions] of documentMimeExtensions) {
+    if (emittedDocuments.has(mimeType)) {
+      extensions.forEach(push);
+      push(mimeType);
+    }
+  }
+
+  return tokens.length > 0 ? tokens.join(',') : undefined;
+};
+
+/**
+ * Resolves the file-input `accept` value for a configured `supportedMimeTypes` allowlist, scoped to
+ * what the current upload path (`capability`) can send to the model.
+ * - `undefined` for the built-in default or a config that can't be represented safely, so callers
+ *   keep their provider-specific filter.
+ * - `''` for permissive configs (e.g. `.*`), leaving the picker unrestricted.
+ * - a translated `accept` string for a recognized finite allowlist (images, PDFs, Office docs, etc.).
+ *
+ * The picker `accept` is a UX convenience, not a security boundary: the backend still enforces
+ * `supportedMimeTypes` on upload.
+ */
+export const getConfiguredMimeAccept = (
+  types: RegexLike[] | undefined,
+  capability: MimeUploadCapability,
+): string | undefined => {
+  /** Referential identity with the built-in list signals an unconfigured endpoint (keep provider filter). */
+  if (!types || types.length === 0 || types === supportedMimeTypes) {
+    return undefined;
+  }
+  if (isPermissiveMimeConfig(types)) {
+    return '';
+  }
+  return buildMimeAccept(types, capability);
+};
 
 /**
  * Gets the appropriate endpoint file configuration with standardized lookup logic.
@@ -583,6 +982,9 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
     endpoints: {
       ...fileConfig.endpoints,
     },
+    skills: {
+      ...fileConfig.skills,
+    },
     ocr: {
       ...fileConfig.ocr,
       supportedMimeTypes: fileConfig.ocr?.supportedMimeTypes || [],
@@ -612,31 +1014,41 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
     mergedConfig.fileTokenLimit = dynamic.fileTokenLimit;
   }
 
-  // Merge clientImageResize configuration
+  if (dynamic.skills?.fileSizeLimit !== undefined) {
+    mergedConfig.skills = {
+      ...mergedConfig.skills,
+      fileSizeLimit: mbToBytes(dynamic.skills.fileSizeLimit),
+    };
+  }
+
+  // Merge clientImageResize configuration; an admin-provided `enabled` overrides the user's setting
   if (dynamic.clientImageResize !== undefined) {
     mergedConfig.clientImageResize = {
       ...mergedConfig.clientImageResize,
       ...dynamic.clientImageResize,
+      enforced: dynamic.clientImageResize.enabled !== undefined,
     };
   }
 
   if (dynamic.ocr !== undefined) {
+    const { supportedMimeTypes: ocrMimeTypes, ...ocrRest } = dynamic.ocr;
     mergedConfig.ocr = {
       ...mergedConfig.ocr,
-      ...dynamic.ocr,
+      ...ocrRest,
     };
-    if (dynamic.ocr.supportedMimeTypes) {
-      mergedConfig.ocr.supportedMimeTypes = convertStringsToRegex(dynamic.ocr.supportedMimeTypes);
+    if (ocrMimeTypes) {
+      mergedConfig.ocr.supportedMimeTypes = convertStringsToRegex(ocrMimeTypes);
     }
   }
 
   if (dynamic.text !== undefined) {
+    const { supportedMimeTypes: textMimeTypes, ...textRest } = dynamic.text;
     mergedConfig.text = {
       ...mergedConfig.text,
-      ...dynamic.text,
+      ...textRest,
     };
-    if (dynamic.text.supportedMimeTypes) {
-      mergedConfig.text.supportedMimeTypes = convertStringsToRegex(dynamic.text.supportedMimeTypes);
+    if (textMimeTypes) {
+      mergedConfig.text.supportedMimeTypes = convertStringsToRegex(textMimeTypes);
     }
   }
 

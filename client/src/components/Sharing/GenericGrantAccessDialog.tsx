@@ -1,16 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { AccessRoleIds, ResourceType } from 'librechat-data-provider';
-import { Share2Icon, Users, Link, CopyCheck, UserX, UserCheck } from 'lucide-react';
+import { Share2Icon, Users, Link, CopyCheck, UserCheck, AlertCircle } from 'lucide-react';
 import {
+  Alert,
   Label,
   Button,
   Spinner,
   Skeleton,
   OGDialog,
+  OGDialogHeader,
+  OGDialogFooter,
   OGDialogTitle,
-  OGDialogClose,
+  OGDialogDescription,
   OGDialogContent,
   OGDialogTrigger,
+  TooltipAnchor,
   useToastContext,
 } from '@librechat/client';
 import type { TPrincipal } from 'librechat-data-provider';
@@ -18,8 +22,10 @@ import {
   usePeoplePickerPermissions,
   useResourcePermissionState,
   useCopyToClipboard,
+  useCanSharePublic,
   useLocalize,
 } from '~/hooks';
+import { computeShareChanges, dedupeNewShares } from './shareChanges';
 import UnifiedPeopleSearch from './PeoplePicker/UnifiedPeopleSearch';
 import PeoplePickerAdminSettings from './PeoplePickerAdminSettings';
 import PublicSharingToggle from './PublicSharingToggle';
@@ -33,6 +39,7 @@ export default function GenericGrantAccessDialog({
   resourceType,
   onGrantAccess,
   disabled = false,
+  buttonClassName,
   children,
 }: {
   resourceDbId?: string | null;
@@ -41,20 +48,28 @@ export default function GenericGrantAccessDialog({
   resourceType: ResourceType;
   onGrantAccess?: (shares: TPrincipal[], isPublic: boolean, publicRole?: AccessRoleIds) => void;
   disabled?: boolean;
+  buttonClassName?: string;
   children?: React.ReactNode;
 }) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
-
-  // Use shared hooks
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const peopleSectionId = React.useId();
+  const ownerErrorId = React.useId();
+  const canSharePublic = useCanSharePublic(resourceType);
   const { hasPeoplePickerAccess, peoplePickerTypeFilter } = usePeoplePickerPermissions();
+
+  /** User can use the share dialog if they have people picker access OR can share publicly */
+  const canUseShareDialog = hasPeoplePickerAccess || canSharePublic;
+
   const {
     config,
     permissionsData,
     isLoadingPermissions,
+    isFetchingPermissions,
     permissionsError,
+    refetchPermissions,
     updatePermissionsMutation,
     currentShares,
     currentIsPublic,
@@ -65,7 +80,7 @@ export default function GenericGrantAccessDialog({
     setPublicRole,
   } = useResourcePermissionState(resourceType, resourceDbId, isModalOpen);
 
-  // State for unified list of all shares (existing + newly added)
+  /** State for unified list of all shares (existing + newly added) */
   const [allShares, setAllShares] = useState<TPrincipal[]>([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [defaultPermissionId, setDefaultPermissionId] = useState<AccessRoleIds | undefined>(
@@ -88,6 +103,11 @@ export default function GenericGrantAccessDialog({
     return null;
   }
 
+  // Don't render if user has no useful sharing permissions
+  if (!canUseShareDialog) {
+    return null;
+  }
+
   if (!config) {
     console.error(`Unsupported resource type: ${resourceType}`);
     return null;
@@ -95,10 +115,10 @@ export default function GenericGrantAccessDialog({
 
   // Handler for adding users from search (immediate add to unified list)
   const handleAddFromSearch = (newShares: TPrincipal[]) => {
-    const sharesToAdd = newShares.filter(
-      (newShare) =>
-        !allShares.some((existing) => existing.idOnTheSource === newShare.idOnTheSource),
-    );
+    const sharesToAdd = dedupeNewShares(allShares, newShares);
+    if (!sharesToAdd.length) {
+      return;
+    }
 
     const sharesWithDefaults = sharesToAdd.map((share) => ({
       ...share,
@@ -148,26 +168,14 @@ export default function GenericGrantAccessDialog({
     }
 
     try {
-      // Calculate changes for unified list
-      const originalSharesMap = new Map(
-        currentShares.map((share) => [`${share.type}-${share.idOnTheSource}`, share]),
-      );
-      const allSharesMap = new Map(
-        allShares.map((share) => [`${share.type}-${share.idOnTheSource}`, share]),
-      );
+      // Diff persisted shares against the working list. Keyed by stable `id`
+      // (falling back to idOnTheSource) so the same principal is never simultaneously
+      // granted and revoked — see computeShareChanges.
+      const { updated, removed } = computeShareChanges(currentShares, allShares);
 
-      // Find newly added and updated shares
-      const updated = allShares.filter((share) => {
-        const key = `${share.type}-${share.idOnTheSource}`;
-        const original = originalSharesMap.get(key);
-        return !original || original.accessRoleId !== share.accessRoleId;
-      });
-
-      // Find removed shares
-      const removed = currentShares.filter((share) => {
-        const key = `${share.type}-${share.idOnTheSource}`;
-        return !allSharesMap.has(key);
-      });
+      const publicChanged = isPublic !== currentIsPublic;
+      const publicRoleChanged = isPublic && publicRole !== currentPublicRole;
+      const sendPublicUpdate = publicChanged || publicRoleChanged;
 
       await updatePermissionsMutation.mutateAsync({
         resourceType,
@@ -175,8 +183,8 @@ export default function GenericGrantAccessDialog({
         data: {
           updated,
           removed,
-          public: isPublic,
-          publicAccessRoleId: isPublic ? publicRole : undefined,
+          ...(sendPublicUpdate ? { public: isPublic } : {}),
+          ...(sendPublicUpdate && isPublic ? { publicAccessRoleId: publicRole } : {}),
         },
       });
 
@@ -199,15 +207,20 @@ export default function GenericGrantAccessDialog({
     }
   };
 
-  const handleCancel = () => {
-    // Reset to original state
+  const resetDraft = () => {
     const shares = permissionsData?.principals || [];
     setAllShares(shares.map((share) => ({ ...share, isExisting: true })));
     setDefaultPermissionId(config?.defaultViewerRoleId);
     setIsPublic(currentIsPublic);
     setPublicRole(currentPublicRole || config?.defaultViewerRoleId || '');
     setHasChanges(false);
-    setIsModalOpen(false);
+  };
+
+  const handleModalOpenChange = (open: boolean) => {
+    if (!open) {
+      resetDraft();
+    }
+    setIsModalOpen(open);
   };
 
   // Validation and calculated values
@@ -222,9 +235,35 @@ export default function GenericGrantAccessDialog({
   const hasPublicChanges = isPublic !== currentIsPublic || publicRole !== currentPublicRole;
   const submitButtonActive = hasChanges || hasPublicChanges;
 
-  // Error handling
+  // On permissions load failure, keep a compact trigger-sized button so the layout holds,
+  // surfacing the error (and a retry on click) through a tooltip.
   if (permissionsError) {
-    return <div className="text-sm text-red-600">{localize('com_ui_permissions_failed_load')}</div>;
+    return (
+      <TooltipAnchor
+        description={localize('com_ui_permissions_failed_load')}
+        render={
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            disabled={disabled}
+            onClick={() => refetchPermissions()}
+            aria-label={localize('com_ui_permissions_failed_load')}
+            className={cn('h-9', buttonClassName)}
+          >
+            <div className="flex min-w-[32px] items-center justify-center text-text-destructive">
+              <span className="flex h-6 w-6 items-center justify-center">
+                {isFetchingPermissions ? (
+                  <Spinner className="h-4 w-4" />
+                ) : (
+                  <AlertCircle className="icon-md h-4 w-4" aria-hidden="true" />
+                )}
+              </span>
+            </div>
+          </Button>
+        }
+      />
+    );
   }
 
   const TriggerComponent = children ? (
@@ -238,11 +277,11 @@ export default function GenericGrantAccessDialog({
       })}
       type="button"
       disabled={disabled}
-      className="h-full"
+      className={cn('h-9', buttonClassName)}
     >
-      <div className="flex min-w-[32px] items-center justify-center gap-2 text-blue-500">
+      <div className="flex min-w-[32px] items-center justify-center gap-2 text-status-info">
         <span className="flex h-6 w-6 items-center justify-center">
-          <Share2Icon className="icon-md h-4 w-4" aria-hidden="true" />
+          <Share2Icon className="icon-md h-4 w-4" />
         </span>
         {totalCurrentShares > 0 && (
           <Label className="cursor-pointer text-sm font-medium text-text-secondary">
@@ -254,159 +293,179 @@ export default function GenericGrantAccessDialog({
   );
 
   return (
-    <OGDialog open={isModalOpen} onOpenChange={setIsModalOpen} modal>
+    <OGDialog open={isModalOpen} onOpenChange={handleModalOpenChange} modal>
       <OGDialogTrigger asChild>{TriggerComponent}</OGDialogTrigger>
-      <OGDialogContent className="max-h-[90vh] w-11/12 overflow-y-auto md:max-w-3xl">
-        <OGDialogTitle>
-          <div className="flex items-center gap-2">
-            <Users className="h-5 w-5" aria-hidden="true" />
-            {localize('com_ui_share_var', {
-              0: config?.getShareMessage(resourceName),
-            })}
+      <OGDialogContent className="flex max-h-[90dvh] w-11/12 max-w-5xl flex-col gap-0 overflow-hidden p-0">
+        <OGDialogHeader className="shrink-0 px-5 py-5 pr-14 text-left sm:px-6">
+          <div className="flex items-start gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border-light bg-surface-secondary text-text-secondary">
+              <Users className="size-5" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <OGDialogTitle className="truncate text-xl leading-7">
+                {localize('com_ui_share_var', {
+                  0: config?.getShareMessage(resourceName),
+                })}
+              </OGDialogTitle>
+              <OGDialogDescription className="sr-only">
+                {localize('com_ui_share_access_description')}
+              </OGDialogDescription>
+            </div>
           </div>
-        </OGDialogTitle>
+        </OGDialogHeader>
 
-        <div className="space-y-6 p-2">
-          {/* Unified Search and Management Section */}
-          <div className="space-y-4">
-            {/* Search Bar with Default Permission Setting */}
-            {hasPeoplePickerAccess && (
-              <div className="space-y-2">
-                <h4 className="mb-2 flex items-center gap-2 text-sm font-medium text-text-primary">
-                  <UserCheck className="h-4 w-4" aria-hidden="true" />
-                  {localize('com_ui_user_group_permissions')} ( {allShares.length} )
-                </h4>
+        <div
+          className="min-h-0 flex-1 overflow-y-auto px-5 py-3 sm:px-6 sm:py-4"
+          aria-busy={isLoadingPermissions}
+        >
+          {hasPeoplePickerAccess && (
+            <section aria-labelledby={peopleSectionId} className="w-full min-w-0">
+              <div className="flex items-center justify-between gap-3 px-1 pb-3">
+                <h3
+                  id={peopleSectionId}
+                  className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text-primary"
+                >
+                  <UserCheck className="size-4 shrink-0 text-text-secondary" aria-hidden="true" />
+                  <span className="truncate">{localize('com_ui_user_group_permissions')}</span>
+                </h3>
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-tertiary text-xs font-medium text-text-secondary">
+                  {allShares.length}
+                </span>
+              </div>
 
-                <UnifiedPeopleSearch
-                  onAddPeople={handleAddFromSearch}
-                  placeholder={localize('com_ui_search_people_placeholder')}
-                  typeFilter={peoplePickerTypeFilter}
-                  excludeIds={allShares.map((s) => s.idOnTheSource)}
-                />
+              <div className="w-full space-y-3">
+                {isLoadingPermissions ? (
+                  <div className="space-y-2" aria-live="polite">
+                    <span className="sr-only">{localize('com_ui_loading')}</span>
+                    <Skeleton className="h-10 w-full rounded-lg" />
+                    <Skeleton className="h-[62px] w-full rounded-xl" />
+                    <Skeleton className="h-[62px] w-full rounded-xl" />
+                  </div>
+                ) : (
+                  <>
+                    <UnifiedPeopleSearch
+                      onAddPeople={handleAddFromSearch}
+                      label={localize('com_ui_search_people_placeholder')}
+                      placeholder={localize('com_ui_search_people_placeholder')}
+                      typeFilter={peoplePickerTypeFilter}
+                      excludeIds={allShares.map((s) => s.idOnTheSource)}
+                    />
 
-                {/* Unified User/Group List */}
-                {(() => {
-                  if (isLoadingPermissions) {
-                    return (
-                      <div className="flex flex-col items-center gap-2">
-                        <Skeleton className="h-[62px] w-full rounded-lg" />
-                        <Skeleton className="h-[62px] w-full rounded-lg" />
-                      </div>
-                    );
-                  }
+                    {!hasAtLeastOneOwner && hasChanges && (
+                      <Alert id={ownerErrorId} variant="error">
+                        {localize('com_ui_at_least_one_owner_required')}
+                      </Alert>
+                    )}
 
-                  if (allShares.length === 0 && !hasChanges) {
-                    return (
-                      <div className="rounded-lg border-2 border-dashed border-border-light p-8 text-center">
-                        <Users className="mx-auto h-8 w-8 text-text-primary" aria-hidden="true" />
-                        <p className="mt-2 text-sm text-text-primary">
-                          {localize('com_ui_no_individual_access')}
+                    {allShares.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-border-medium px-5 py-8 text-center">
+                        <div className="mx-auto flex size-10 items-center justify-center rounded-full bg-surface-tertiary text-text-secondary">
+                          <Users className="size-5" aria-hidden="true" />
+                        </div>
+                        <p className="mt-3 text-sm font-medium text-text-primary">
+                          {localize('com_ui_no_individual_resource_access')}
                         </p>
-                        <p className="mt-1 text-xs text-text-primary">
+                        <p className="mt-1 text-xs text-text-secondary">
                           {localize('com_ui_search_above_to_add_people')}
                         </p>
                       </div>
-                    );
-                  }
-
-                  return (
-                    <div className="space-y-2">
-                      {!hasAtLeastOneOwner && hasChanges && (
-                        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-center">
-                          <div className="flex items-center justify-center gap-2 text-sm text-red-600 dark:text-red-400">
-                            <UserX className="h-4 w-4" aria-hidden="true" />
-                            {localize('com_ui_at_least_one_owner_required')}
-                          </div>
-                        </div>
-                      )}
+                    ) : (
                       <SelectedPrincipalsList
                         principles={allShares}
                         onRemoveHandler={handleRemoveShare}
                         resourceType={resourceType}
                         onRoleChange={(id, newRole) => handleRoleChange(id, newRole)}
                       />
-                    </div>
-                  );
-                })()}
+                    )}
+                  </>
+                )}
               </div>
+
+              {canSharePublic && (
+                <div className="mt-4 border-t border-border-light pt-4">
+                  <PublicSharingToggle
+                    isPublic={isPublic}
+                    publicRole={publicRole}
+                    onPublicToggle={handlePublicToggle}
+                    onPublicRoleChange={handlePublicRoleChange}
+                    resourceType={resourceType}
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
+          {canSharePublic && !hasPeoplePickerAccess && (
+            <section className="w-full">
+              <PublicSharingToggle
+                isPublic={isPublic}
+                publicRole={publicRole}
+                onPublicToggle={handlePublicToggle}
+                onPublicRoleChange={handlePublicRoleChange}
+                resourceType={resourceType}
+              />
+            </section>
+          )}
+        </div>
+
+        <OGDialogFooter className="shrink-0 gap-3 bg-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0 sm:px-6">
+          <div className="flex flex-col-reverse gap-2 sm:flex-row">
+            <PeoplePickerAdminSettings />
+            {resourceId && resourceUrl && (
+              <TooltipAnchor
+                description={
+                  isCopying ? config?.getCopyUrlMessage() : localize('com_ui_copy_url_to_clipboard')
+                }
+                render={
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (isCopying) return;
+                      if (!copyResourceUrl(setIsCopying)) return;
+                      showToast({
+                        message: localize('com_ui_agent_url_copied'),
+                        status: 'success',
+                      });
+                    }}
+                    disabled={isCopying}
+                    className={cn('shrink-0 gap-2', isCopying ? 'cursor-default' : '')}
+                    aria-label={localize('com_ui_copy_url_to_clipboard')}
+                  >
+                    {isCopying ? (
+                      <CopyCheck className="size-4" aria-hidden="true" />
+                    ) : (
+                      <Link className="size-4" aria-hidden="true" />
+                    )}
+                    {isCopying
+                      ? config?.getCopyUrlMessage()
+                      : localize('com_ui_copy_url_to_clipboard')}
+                  </Button>
+                }
+              />
             )}
           </div>
-
-          <div className="flex border-t border-border-light" />
-
-          {/* Public Access Section */}
-          <PublicSharingToggle
-            isPublic={isPublic}
-            publicRole={publicRole}
-            onPublicToggle={handlePublicToggle}
-            onPublicRoleChange={handlePublicRoleChange}
-            resourceType={resourceType}
-          />
-
-          {/* Footer Actions */}
-          <div className="flex justify-between pt-4">
-            <div className="flex gap-2">
-              {resourceId && resourceUrl && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    if (isCopying) return;
-                    copyResourceUrl(setIsCopying);
-                    showToast({
-                      message: localize('com_ui_agent_url_copied'),
-                      status: 'success',
-                    });
-                  }}
-                  disabled={isCopying}
-                  className={cn('shrink-0', isCopying ? 'cursor-default' : '')}
-                  aria-label={localize('com_ui_copy_url_to_clipboard')}
-                  title={
-                    isCopying
-                      ? config?.getCopyUrlMessage()
-                      : localize('com_ui_copy_url_to_clipboard')
-                  }
-                >
-                  {isCopying ? (
-                    <CopyCheck className="h-4 w-4" aria-hidden="true" />
-                  ) : (
-                    <Link className="h-4 w-4" aria-hidden="true" />
-                  )}
-                </Button>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <PeoplePickerAdminSettings />
-              <OGDialogClose asChild>
-                <Button
-                  variant="outline"
-                  onClick={handleCancel}
-                  aria-label={localize('com_ui_cancel')}
-                >
-                  {localize('com_ui_cancel')}
-                </Button>
-              </OGDialogClose>
-              <Button
-                onClick={handleSave}
-                disabled={
-                  updatePermissionsMutation.isLoading ||
-                  !submitButtonActive ||
-                  (hasChanges && !hasAtLeastOneOwner)
-                }
-                className="min-w-[120px]"
-                aria-label={localize('com_ui_save_changes')}
-              >
-                {updatePermissionsMutation.isLoading ? (
-                  <div className="flex items-center gap-2">
-                    <Spinner className="h-4 w-4" />
-                    {localize('com_ui_saving')}
-                  </div>
-                ) : (
-                  localize('com_ui_save_changes')
-                )}
-              </Button>
-            </div>
-          </div>
-        </div>
+          <Button
+            variant="submit"
+            onClick={handleSave}
+            disabled={
+              updatePermissionsMutation.isLoading ||
+              !submitButtonActive ||
+              (hasChanges && !hasAtLeastOneOwner)
+            }
+            className="w-full sm:w-auto"
+            aria-label={localize('com_ui_save')}
+            aria-describedby={hasChanges && !hasAtLeastOneOwner ? ownerErrorId : undefined}
+          >
+            {updatePermissionsMutation.isLoading ? (
+              <div className="flex items-center gap-2">
+                <Spinner className="size-4" />
+                {localize('com_ui_saving')}
+              </div>
+            ) : (
+              localize('com_ui_save')
+            )}
+          </Button>
+        </OGDialogFooter>
       </OGDialogContent>
     </OGDialog>
   );

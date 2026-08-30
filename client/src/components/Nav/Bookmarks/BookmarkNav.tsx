@@ -1,10 +1,10 @@
-import { useState, useId, useMemo, useCallback } from 'react';
+import { useState, useId, useMemo, useCallback, memo } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { CrossCircledIcon } from '@radix-ui/react-icons';
-import { DropdownPopup, TooltipAnchor } from '@librechat/client';
 import { BookmarkFilledIcon, BookmarkIcon } from '@radix-ui/react-icons';
-import type * as t from '~/common';
+import { DropdownPopup, TooltipAnchor, buttonVariants } from '@librechat/client';
 import type { FC } from 'react';
+import type * as t from '~/common';
 import { useGetConversationTags } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
@@ -24,6 +24,13 @@ const BookmarkNav: FC<BookmarkNavProps> = ({ tags, setTags }: BookmarkNavProps) 
     () => (tags.length > 0 ? tags.join(', ') : localize('com_ui_bookmarks')),
     [tags, localize],
   );
+
+  const buttonAriaLabel = useMemo(() => {
+    if (tags.length === 0) {
+      return localize('com_ui_bookmarks');
+    }
+    return localize('com_ui_bookmarks_count_selected', { count: tags.length });
+  }, [tags.length, localize]);
 
   const bookmarks = useMemo(() => data?.filter((tag) => tag.count > 0) ?? [], [data]);
 
@@ -73,6 +80,7 @@ const BookmarkNav: FC<BookmarkNavProps> = ({ tags, setTags }: BookmarkNavProps) 
             <BookmarkIcon className="size-4" />
           ),
           onClick: () => handleTagClick(bookmark.tag),
+          ariaChecked: isSelected,
         });
       }
     }
@@ -89,25 +97,27 @@ const BookmarkNav: FC<BookmarkNavProps> = ({ tags, setTags }: BookmarkNavProps) 
       unmountOnHide={true}
       setIsOpen={setIsMenuOpen}
       keyPrefix="bookmark-nav-"
+      className="z-[125]"
       trigger={
         <TooltipAnchor
           description={label}
           render={
             <Ariakit.MenuButton
               id="bookmark-nav-menu-button"
-              aria-label={localize('com_ui_bookmarks')}
+              aria-label={buttonAriaLabel}
+              aria-pressed={tags.length > 0}
+              /** Matches the Projects heading's actions — it sits beside a section heading too. */
               className={cn(
-                'flex items-center justify-center',
-                'size-10 border-none text-text-primary hover:bg-accent hover:text-accent-foreground',
-                'rounded-full border-none p-2 hover:bg-surface-active-alt md:rounded-xl',
-                isMenuOpen ? 'bg-surface-hover' : '',
+                buttonVariants({ variant: 'section-action', size: 'icon-xs' }),
+                'shrink-0',
+                isMenuOpen && 'bg-surface-active-alt text-text-primary',
               )}
               data-testid="bookmark-menu"
             >
               {tags.length > 0 ? (
-                <BookmarkFilledIcon aria-hidden="true" className="icon-lg text-text-primary" />
+                <BookmarkFilledIcon aria-hidden="true" className="size-4" />
               ) : (
-                <BookmarkIcon aria-hidden="true" className="icon-lg text-text-primary" />
+                <BookmarkIcon aria-hidden="true" className="size-4" />
               )}
             </Ariakit.MenuButton>
           }
@@ -118,4 +128,4 @@ const BookmarkNav: FC<BookmarkNavProps> = ({ tags, setTags }: BookmarkNavProps) 
   );
 };
 
-export default BookmarkNav;
+export default memo(BookmarkNav);

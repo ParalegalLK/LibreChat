@@ -1,16 +1,22 @@
 /**
  * Tests for MCPConnection error detection methods.
  *
- * These tests use standalone implementations that mirror the private methods in MCPConnection.
- * This approach was chosen because MCPConnection requires complex dependencies (Client, transport)
- * that are difficult to mock properly. The standalone implementations are kept in sync with
- * the actual implementation in connection.ts.
+ * Rate-limit tests use a standalone implementation that mirrors a private method in
+ * MCPConnection. OAuth and SSE classification exercise the production helpers shared by the
+ * connection and factory.
  *
  * Alternative approaches considered:
  * 1. Reflection/type casting - fragile and breaks with refactoring
  * 2. Protected methods with test subclass - changes public API for testing
  * 3. Integration tests - tested separately in the full MCP test suite
  */
+import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  extractSSEErrorMessage,
+  isOAuthAuthenticationError,
+  isStandaloneSseConflict,
+} from '~/mcp/errors';
+
 describe('MCPConnection Error Detection', () => {
   /**
    * Standalone implementation of isRateLimitError for testing.
@@ -38,48 +44,6 @@ describe('MCPConnection Error Detection', () => {
         message.includes('rate limit') ||
         message.includes('too many requests')
       ) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * Standalone implementation of isOAuthError for testing.
-   * This mirrors the private method in MCPConnection (connection.ts).
-   * Keep in sync with the actual implementation.
-   */
-  function isOAuthError(error: unknown): boolean {
-    if (!error || typeof error !== 'object') {
-      return false;
-    }
-
-    // Check for error code
-    if ('code' in error) {
-      const code = (error as { code?: number }).code;
-      if (code === 401 || code === 403) {
-        return true;
-      }
-    }
-
-    // Check message for various auth error indicators
-    if ('message' in error && typeof error.message === 'string') {
-      const message = error.message.toLowerCase();
-      // Check for 401 status
-      if (message.includes('401') || message.includes('non-200 status code (401)')) {
-        return true;
-      }
-      // Check for invalid_grant (OAuth servers return this for expired/revoked grants)
-      if (message.includes('invalid_grant')) {
-        return true;
-      }
-      // Check for invalid_token (OAuth servers return this for expired/revoked tokens)
-      if (message.includes('invalid_token')) {
-        return true;
-      }
-      // Check for authentication required
-      if (message.includes('authentication required') || message.includes('unauthorized')) {
         return true;
       }
     }
@@ -138,30 +102,36 @@ describe('MCPConnection Error Detection', () => {
     });
   });
 
-  describe('isOAuthError', () => {
-    it('should detect OAuth error by code 401', () => {
-      const error = { code: 401, message: 'Unauthorized' };
-      expect(isOAuthError(error)).toBe(true);
+  describe('isOAuthAuthenticationError', () => {
+    it.each([
+      { code: 401, message: 'Unauthorized' },
+      { status: 403, message: 'Forbidden' },
+      { statusCode: 401, message: 'Authentication required' },
+      { message: 'Error POSTing to endpoint (HTTP 401): Unauthorized' },
+      { message: 'Error POSTing to endpoint (HTTP 403): Forbidden' },
+      { message: 'Non-200 status code (403)' },
+      { message: '403 Forbidden' },
+      { message: 'Unauthorized (401)' },
+      { message: 'Forbidden (403)' },
+      { message: 'The server rejected the token with insufficient_scope' },
+    ])('should detect OAuth authentication error %#', (error) => {
+      expect(isOAuthAuthenticationError(error)).toBe(true);
     });
 
-    it('should detect OAuth error by code 403', () => {
-      const error = { code: 403, message: 'Forbidden' };
-      expect(isOAuthError(error)).toBe(true);
-    });
-
-    it('should detect OAuth error by message containing 401', () => {
-      const error = { message: 'Error POSTing to endpoint (HTTP 401): Unauthorized' };
-      expect(isOAuthError(error)).toBe(true);
-    });
-
-    it('should not detect OAuth error for 429 rate limit', () => {
-      const error = { code: 429, message: 'Too many requests' };
-      expect(isOAuthError(error)).toBe(false);
+    it.each([
+      { code: 429, message: 'Too many requests' },
+      { message: 'Customer 401 not found' },
+      { message: 'Order 403 is unavailable' },
+      { message: 'User is unauthorized to delete this record' },
+      { message: 'No authorization to delete this record' },
+      { code: 400, message: 'Bad request: missing required field' },
+    ])('should ignore non-authentication error %#', (error) => {
+      expect(isOAuthAuthenticationError(error)).toBe(false);
     });
 
     it('should detect OAuth error for invalid_token', () => {
       const error = { message: 'The access token is invalid_token or expired' };
-      expect(isOAuthError(error)).toBe(true);
+      expect(isOAuthAuthenticationError(error)).toBe(true);
     });
 
     it('should detect OAuth error for invalid_grant', () => {
@@ -169,7 +139,20 @@ describe('MCPConnection Error Detection', () => {
         message:
           'Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_grant","error_description":"The provided authorization grant is invalid, expired, or revoked"}',
       };
-      expect(isOAuthError(error)).toBe(true);
+      expect(isOAuthAuthenticationError(error)).toBe(true);
+    });
+
+    it('should detect OAuth error for "no authorization" in message (HTTP 400)', () => {
+      const error = {
+        message:
+          'Either no authorization values are specified or it could not be derived from the request',
+      };
+      expect(isOAuthAuthenticationError(error)).toBe(true);
+    });
+
+    it('should detect OAuth error for "No authorization" with different casing', () => {
+      const error = { message: 'No Authorization header provided' };
+      expect(isOAuthAuthenticationError(error)).toBe(true);
     });
   });
 
@@ -180,10 +163,10 @@ describe('MCPConnection Error Detection', () => {
 
       // Rate limit error should be detected as rate limit, not OAuth
       expect(isRateLimitError(rateLimitError)).toBe(true);
-      expect(isOAuthError(rateLimitError)).toBe(false);
+      expect(isOAuthAuthenticationError(rateLimitError)).toBe(false);
 
       // OAuth error should be detected as OAuth, not rate limit
-      expect(isOAuthError(oauthError)).toBe(true);
+      expect(isOAuthAuthenticationError(oauthError)).toBe(true);
       expect(isRateLimitError(oauthError)).toBe(false);
     });
   });
@@ -195,109 +178,6 @@ describe('MCPConnection Error Detection', () => {
  * particularly handling the "SSE error: undefined" case from the MCP SDK.
  */
 describe('extractSSEErrorMessage', () => {
-  /**
-   * Standalone implementation of extractSSEErrorMessage for testing.
-   * This mirrors the function in connection.ts.
-   * Keep in sync with the actual implementation.
-   */
-  function extractSSEErrorMessage(error: unknown): {
-    message: string;
-    code?: number;
-    isProxyHint: boolean;
-    isTransient: boolean;
-  } {
-    if (!error || typeof error !== 'object') {
-      return {
-        message: 'Unknown SSE transport error',
-        isProxyHint: true,
-        isTransient: true,
-      };
-    }
-
-    const errorObj = error as { message?: string; code?: number; event?: unknown };
-    const rawMessage = errorObj.message ?? '';
-    const code = errorObj.code;
-
-    // Handle the common "SSE error: undefined" case
-    if (rawMessage === 'SSE error: undefined' || rawMessage === 'undefined' || !rawMessage) {
-      return {
-        message:
-          'SSE connection closed. This can occur due to: (1) idle connection timeout (normal), ' +
-          '(2) reverse proxy buffering (check proxy_buffering config), or (3) network interruption.',
-        code,
-        isProxyHint: true,
-        isTransient: true,
-      };
-    }
-
-    // Check for timeout patterns with case-insensitive matching
-    const lowerMessage = rawMessage.toLowerCase();
-    if (
-      rawMessage.includes('ETIMEDOUT') ||
-      rawMessage.includes('ESOCKETTIMEDOUT') ||
-      lowerMessage.includes('timed out') ||
-      lowerMessage.includes('timeout after') ||
-      lowerMessage.includes('request timeout')
-    ) {
-      return {
-        message: `SSE connection timed out: ${rawMessage}. If behind a reverse proxy, increase proxy_read_timeout.`,
-        code,
-        isProxyHint: true,
-        isTransient: true,
-      };
-    }
-
-    // Connection reset is often transient
-    if (rawMessage.includes('ECONNRESET')) {
-      return {
-        message: `SSE connection reset: ${rawMessage}. The server or proxy may have restarted.`,
-        code,
-        isProxyHint: false,
-        isTransient: true,
-      };
-    }
-
-    // Connection refused is more serious
-    if (rawMessage.includes('ECONNREFUSED')) {
-      return {
-        message: `SSE connection refused: ${rawMessage}. Verify the MCP server is running and accessible.`,
-        code,
-        isProxyHint: false,
-        isTransient: false,
-      };
-    }
-
-    // DNS failure
-    if (rawMessage.includes('ENOTFOUND') || rawMessage.includes('getaddrinfo')) {
-      return {
-        message: `SSE DNS resolution failed: ${rawMessage}. Check the server URL is correct.`,
-        code,
-        isProxyHint: false,
-        isTransient: false,
-      };
-    }
-
-    // Check for HTTP status codes
-    const statusMatch = rawMessage.match(/\b(4\d{2}|5\d{2})\b/);
-    if (statusMatch) {
-      const statusCode = parseInt(statusMatch[1], 10);
-      const isServerError = statusCode >= 500 && statusCode < 600;
-      return {
-        message: rawMessage,
-        code: statusCode,
-        isProxyHint: statusCode === 502 || statusCode === 503 || statusCode === 504,
-        isTransient: isServerError,
-      };
-    }
-
-    return {
-      message: rawMessage,
-      code,
-      isProxyHint: false,
-      isTransient: false,
-    };
-  }
-
   describe('undefined/empty error handling', () => {
     it('should handle "SSE error: undefined" from MCP SDK', () => {
       const error = { message: 'SSE error: undefined', code: undefined };
@@ -526,6 +406,332 @@ describe('extractSSEErrorMessage', () => {
       expect(result.code).toBe(42);
       expect(result.isProxyHint).toBe(false);
       expect(result.isTransient).toBe(false);
+    });
+  });
+
+  describe('fetch failed errors', () => {
+    it('should detect "fetch failed" as transient', () => {
+      const error = { message: 'fetch failed' };
+      const result = extractSSEErrorMessage(error);
+
+      expect(result.message).toContain('fetch failed');
+      expect(result.message).toContain('request aborted');
+      expect(result.isProxyHint).toBe(false);
+      expect(result.isTransient).toBe(true);
+    });
+
+    it('should not match "fetch failed" as a substring in a longer message', () => {
+      const error = { message: 'Something fetch failed to do' };
+      const result = extractSSEErrorMessage(error);
+
+      expect(result.message).toBe('Something fetch failed to do');
+      expect(result.isTransient).toBe(false);
+    });
+  });
+
+  describe('status carried on code rather than in the message', () => {
+    it('should classify a 409 standalone SSE stream conflict as transient', () => {
+      const error = new StreamableHTTPError(409, 'Failed to open SSE stream: Conflict');
+      const result = extractSSEErrorMessage(error);
+
+      expect(result.code).toBe(409);
+      expect(result.isTransient).toBe(true);
+      expect(result.isProxyHint).toBe(false);
+    });
+
+    it('should classify a 5xx as transient when the message carries no digits', () => {
+      const error = new StreamableHTTPError(503, 'Failed to open SSE stream: Service Unavailable');
+      const result = extractSSEErrorMessage(error);
+
+      expect(result.code).toBe(503);
+      expect(result.isTransient).toBe(true);
+      expect(result.isProxyHint).toBe(true);
+    });
+
+    it('should keep other 4xx non-transient when the message carries no digits', () => {
+      const error = new StreamableHTTPError(403, 'Failed to open SSE stream: Forbidden');
+      const result = extractSSEErrorMessage(error);
+
+      expect(result.code).toBe(403);
+      expect(result.isTransient).toBe(false);
+    });
+
+    it('should ignore non-HTTP codes so they do not reach the status branch', () => {
+      const error = { message: 'Something went wrong', code: 42 };
+      const result = extractSSEErrorMessage(error);
+
+      expect(result.code).toBe(42);
+      expect(result.isTransient).toBe(false);
+    });
+  });
+});
+
+describe('isStandaloneSseConflict', () => {
+  it('should detect the SDK 409 raised when opening the standalone SSE stream', () => {
+    const error = new StreamableHTTPError(409, 'Failed to open SSE stream: Conflict');
+
+    expect(isStandaloneSseConflict(error)).toBe(true);
+  });
+
+  it('should not match a 409 raised for anything other than the SSE stream', () => {
+    const error = new StreamableHTTPError(409, 'Failed to send message');
+
+    expect(isStandaloneSseConflict(error)).toBe(false);
+  });
+
+  it('should not match other statuses on the SSE stream', () => {
+    const error = new StreamableHTTPError(500, 'Failed to open SSE stream: Internal Server Error');
+
+    expect(isStandaloneSseConflict(error)).toBe(false);
+  });
+
+  it('should not match a look-alike error from another transport', () => {
+    const error = Object.assign(new Error('Failed to open SSE stream: Conflict'), { code: 409 });
+
+    expect(isStandaloneSseConflict(error)).toBe(false);
+  });
+
+  it('should not match non-error values', () => {
+    expect(isStandaloneSseConflict(undefined)).toBe(false);
+    expect(isStandaloneSseConflict('Conflict')).toBe(false);
+  });
+});
+
+/**
+ * Tests for circuit breaker logic.
+ *
+ * Uses standalone implementations that mirror the static/private circuit breaker
+ * methods in MCPConnection. Same approach as the error detection tests above.
+ */
+describe('MCPConnection Circuit Breaker', () => {
+  /** 5 cycles within 60s triggers a 30s cooldown */
+  const CB_MAX_CYCLES = 5;
+  const CB_CYCLE_WINDOW_MS = 60_000;
+  const CB_CYCLE_COOLDOWN_MS = 30_000;
+
+  /** 3 failed rounds within 120s triggers exponential backoff (30s - 300s) */
+  const CB_MAX_FAILED_ROUNDS = 3;
+  const CB_FAILED_WINDOW_MS = 120_000;
+  const CB_BASE_BACKOFF_MS = 30_000;
+  const CB_MAX_BACKOFF_MS = 300_000;
+
+  interface CircuitBreakerState {
+    cycleCount: number;
+    cycleWindowStart: number;
+    cooldownUntil: number;
+    failedRounds: number;
+    failedWindowStart: number;
+    failedBackoffUntil: number;
+  }
+
+  function createCB(): CircuitBreakerState {
+    return {
+      cycleCount: 0,
+      cycleWindowStart: Date.now(),
+      cooldownUntil: 0,
+      failedRounds: 0,
+      failedWindowStart: Date.now(),
+      failedBackoffUntil: 0,
+    };
+  }
+
+  function isCircuitOpen(cb: CircuitBreakerState): boolean {
+    const now = Date.now();
+    return now < cb.cooldownUntil || now < cb.failedBackoffUntil;
+  }
+
+  function recordCycle(cb: CircuitBreakerState): void {
+    const now = Date.now();
+    if (now - cb.cycleWindowStart > CB_CYCLE_WINDOW_MS) {
+      cb.cycleCount = 0;
+      cb.cycleWindowStart = now;
+    }
+    cb.cycleCount++;
+    if (cb.cycleCount >= CB_MAX_CYCLES) {
+      cb.cooldownUntil = now + CB_CYCLE_COOLDOWN_MS;
+      cb.cycleCount = 0;
+      cb.cycleWindowStart = now;
+    }
+  }
+
+  function recordFailedRound(cb: CircuitBreakerState): void {
+    const now = Date.now();
+    if (now - cb.failedWindowStart > CB_FAILED_WINDOW_MS) {
+      cb.failedRounds = 0;
+      cb.failedWindowStart = now;
+    }
+    cb.failedRounds++;
+    if (cb.failedRounds >= CB_MAX_FAILED_ROUNDS) {
+      const backoff = Math.min(
+        CB_BASE_BACKOFF_MS * Math.pow(2, cb.failedRounds - CB_MAX_FAILED_ROUNDS),
+        CB_MAX_BACKOFF_MS,
+      );
+      cb.failedBackoffUntil = now + backoff;
+    }
+  }
+
+  function resetFailedRounds(cb: CircuitBreakerState): void {
+    cb.failedRounds = 0;
+    cb.failedWindowStart = Date.now();
+    cb.failedBackoffUntil = 0;
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  describe('cycle tracking', () => {
+    it('should not trigger cooldown for fewer than 5 cycles', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const cb = createCB();
+      for (let i = 0; i < CB_MAX_CYCLES - 1; i++) {
+        recordCycle(cb);
+      }
+      expect(isCircuitOpen(cb)).toBe(false);
+    });
+
+    it('should trigger 30s cooldown after 5 cycles within 60s', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const cb = createCB();
+      for (let i = 0; i < CB_MAX_CYCLES; i++) {
+        recordCycle(cb);
+      }
+      expect(isCircuitOpen(cb)).toBe(true);
+
+      jest.advanceTimersByTime(29_000);
+      expect(isCircuitOpen(cb)).toBe(true);
+
+      jest.advanceTimersByTime(1_000);
+      expect(isCircuitOpen(cb)).toBe(false);
+    });
+
+    it('should reset cycle count when window expires', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const cb = createCB();
+      for (let i = 0; i < CB_MAX_CYCLES - 1; i++) {
+        recordCycle(cb);
+      }
+
+      jest.advanceTimersByTime(CB_CYCLE_WINDOW_MS + 1);
+
+      recordCycle(cb);
+      expect(isCircuitOpen(cb)).toBe(false);
+    });
+  });
+
+  describe('failed round tracking', () => {
+    it('should not trigger backoff for fewer than 3 failures', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const cb = createCB();
+      for (let i = 0; i < CB_MAX_FAILED_ROUNDS - 1; i++) {
+        recordFailedRound(cb);
+      }
+      expect(isCircuitOpen(cb)).toBe(false);
+    });
+
+    it('should trigger 30s backoff after 3 failures within 120s', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const cb = createCB();
+      for (let i = 0; i < CB_MAX_FAILED_ROUNDS; i++) {
+        recordFailedRound(cb);
+      }
+      expect(isCircuitOpen(cb)).toBe(true);
+
+      jest.advanceTimersByTime(CB_BASE_BACKOFF_MS);
+      expect(isCircuitOpen(cb)).toBe(false);
+    });
+
+    it('should use exponential backoff based on failure count', () => {
+      jest.setSystemTime(Date.now());
+
+      const cb = createCB();
+
+      for (let i = 0; i < 3; i++) {
+        recordFailedRound(cb);
+      }
+      expect(cb.failedBackoffUntil - Date.now()).toBe(30_000);
+
+      recordFailedRound(cb);
+      expect(cb.failedBackoffUntil - Date.now()).toBe(60_000);
+
+      recordFailedRound(cb);
+      expect(cb.failedBackoffUntil - Date.now()).toBe(120_000);
+
+      recordFailedRound(cb);
+      expect(cb.failedBackoffUntil - Date.now()).toBe(240_000);
+
+      // capped at 300s
+      recordFailedRound(cb);
+      expect(cb.failedBackoffUntil - Date.now()).toBe(300_000);
+    });
+
+    it('should reset failed window when window expires', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const cb = createCB();
+      recordFailedRound(cb);
+      recordFailedRound(cb);
+
+      jest.advanceTimersByTime(CB_FAILED_WINDOW_MS + 1);
+
+      recordFailedRound(cb);
+      expect(isCircuitOpen(cb)).toBe(false);
+    });
+  });
+
+  describe('resetFailedRounds', () => {
+    it('should clear failed round state on successful connection', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const cb = createCB();
+      for (let i = 0; i < CB_MAX_FAILED_ROUNDS; i++) {
+        recordFailedRound(cb);
+      }
+      expect(isCircuitOpen(cb)).toBe(true);
+
+      resetFailedRounds(cb);
+      expect(isCircuitOpen(cb)).toBe(false);
+      expect(cb.failedRounds).toBe(0);
+      expect(cb.failedBackoffUntil).toBe(0);
+    });
+  });
+
+  describe('clearCooldown (registry deletion)', () => {
+    it('should allow connections after clearing circuit breaker state', () => {
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      const registry = new Map<string, CircuitBreakerState>();
+      const serverName = 'test-server';
+
+      const cb = createCB();
+      registry.set(serverName, cb);
+
+      for (let i = 0; i < CB_MAX_CYCLES; i++) {
+        recordCycle(cb);
+      }
+      expect(isCircuitOpen(cb)).toBe(true);
+
+      registry.delete(serverName);
+
+      const newCb = createCB();
+      expect(isCircuitOpen(newCb)).toBe(false);
     });
   });
 });

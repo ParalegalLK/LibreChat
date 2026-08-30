@@ -1,56 +1,58 @@
-import { startTransition } from 'react';
 import { TooltipAnchor, Button, Sidebar } from '@librechat/client';
+import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
+import useSidebarToggle from '~/hooks/Nav/useSidebarToggle';
 import { useLocalize } from '~/hooks';
-import { cn } from '~/utils';
 
-/** Element ID for the close sidebar button - used for focus management */
 export const CLOSE_SIDEBAR_ID = 'close-sidebar-button';
-/** Element ID for the open sidebar button - used for focus management */
 export const OPEN_SIDEBAR_ID = 'open-sidebar-button';
 
+/**
+ * `testId` exists because the sidebar rail publishes `open-sidebar-button` for its own
+ * collapsed toggle. Any caller that can stay mounted alongside the rail must claim a
+ * distinct id, or `getByTestId` resolves to two elements.
+ */
 export default function OpenSidebar({
-  setNavVisible,
   className,
+  testId = OPEN_SIDEBAR_ID,
 }: {
-  setNavVisible: React.Dispatch<React.SetStateAction<boolean>>;
   className?: string;
+  testId?: string;
 }) {
   const localize = useLocalize();
+  const { setSidebarOpen } = useSidebarToggle();
+  const tooltipDescription = useShortcutHint('toggleSidebar', localize('com_nav_open_sidebar'));
+  const ariaKey = useShortcutAriaKey('toggleSidebar');
 
   const handleClick = () => {
-    // Use startTransition to mark this as a non-urgent update
-    // This prevents blocking the main thread during the cascade of re-renders
-    startTransition(() => {
-      setNavVisible((prev) => {
-        localStorage.setItem('navVisible', JSON.stringify(!prev));
-        return !prev;
-      });
-    });
-    // Delay focus until after the sidebar animation completes (200ms)
-    setTimeout(() => {
-      document.getElementById(CLOSE_SIDEBAR_ID)?.focus();
-    }, 250);
+    const mode = setSidebarOpen(true);
+    if (mode === 'none') {
+      /** Desktop only: the expanded panel claims `CLOSE_SIDEBAR_ID` and has
+       * no commit-driven handoff of its own. The mobile drawer focuses its
+       * toggle from the commit itself — a second timer there would steal
+       * focus back from a keyboard user who has already tabbed onward. */
+      setTimeout(() => {
+        document.getElementById(CLOSE_SIDEBAR_ID)?.focus();
+      }, 250);
+    }
   };
 
   return (
     <TooltipAnchor
-      description={localize('com_nav_open_sidebar')}
+      description={tooltipDescription}
       render={
         <Button
           id={OPEN_SIDEBAR_ID}
           size="icon"
-          variant="outline"
-          data-testid="open-sidebar-button"
+          variant="header-action"
+          data-testid={testId}
           aria-label={localize('com_nav_open_sidebar')}
           aria-expanded={false}
           aria-controls="chat-history-nav"
-          className={cn(
-            'rounded-xl bg-presentation duration-0 hover:bg-surface-active-alt',
-            className,
-          )}
+          aria-keyshortcuts={ariaKey}
+          className={className}
           onClick={handleClick}
         >
-          <Sidebar aria-hidden="true" />
+          <Sidebar className="icon-md" aria-hidden="true" />
         </Button>
       }
     />

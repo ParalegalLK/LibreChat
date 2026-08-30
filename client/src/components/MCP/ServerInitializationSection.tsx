@@ -9,12 +9,14 @@ interface ServerInitializationSectionProps {
   requiresOAuth: boolean;
   hasCustomUserVars?: boolean;
   conversationId?: string | null;
+  storageContextKey?: string;
 }
 
 export default function ServerInitializationSection({
   serverName,
   requiresOAuth,
   conversationId,
+  storageContextKey,
   sidePanel = false,
   hasCustomUserVars = false,
 }: ServerInitializationSectionProps) {
@@ -27,8 +29,9 @@ export default function ServerInitializationSection({
     cancelOAuthFlow,
     initializeServer,
     availableMCPServers,
+    availableMCPServersMap,
     revokeOAuthForServer,
-  } = useMCPServerManager({ conversationId });
+  } = useMCPServerManager({ conversationId, storageContextKey });
 
   const { connectionStatus } = useMCPConnectionStatus({
     enabled: !!availableMCPServers && availableMCPServers.length > 0,
@@ -36,15 +39,46 @@ export default function ServerInitializationSection({
 
   const serverStatus = connectionStatus?.[serverName];
   const isConnected = serverStatus?.connectionState === 'connected';
-  const canCancel = isCancellable(serverName);
+  const hasPendingOAuth =
+    requiresOAuth &&
+    serverStatus?.requiresOAuth === true &&
+    serverStatus.connectionState === 'connecting';
+  const canCancel = isCancellable(serverName) || hasPendingOAuth;
   const isServerInitializing = isInitializing(serverName);
   const serverOAuthUrl = getOAuthUrl(serverName);
 
-  const shouldShowReinit = isConnected && (requiresOAuth || hasCustomUserVars);
-  const shouldShowInit = !isConnected && !serverOAuthUrl;
+  const requestScoped =
+    serverStatus?.requestScoped === true ||
+    availableMCPServersMap?.[serverName]?.requestScoped === true;
+  const shouldShowReinit = isConnected && !requestScoped && (requiresOAuth || hasCustomUserVars);
+  /** Saving custom variables makes an on-demand server ready, but it still
+   * needs one explicit initialization attempt so callers waiting to attach the
+   * runtime wildcard observe `connectionDeferred`. */
+  const canDeferRequestScopedConnection =
+    requestScoped && hasCustomUserVars && serverStatus?.configurationState === 'configured';
+  const shouldShowInit =
+    !isConnected &&
+    (!requestScoped || canDeferRequestScopedConnection) &&
+    !serverOAuthUrl &&
+    !hasPendingOAuth;
+  const shouldShowRevoke = requiresOAuth && revokeOAuthForServer != null;
 
-  if (!shouldShowReinit && !shouldShowInit && !serverOAuthUrl) {
-    return null;
+  if (!shouldShowReinit && !shouldShowInit && !shouldShowRevoke && !serverOAuthUrl) {
+    if (!hasPendingOAuth) {
+      return null;
+    }
+
+    return (
+      <Button
+        onClick={() => cancelOAuthFlow(serverName)}
+        disabled={!canCancel}
+        variant="outline"
+        size={sidePanel ? 'sm' : 'default'}
+        className="w-full"
+      >
+        {localize('com_ui_cancel')}
+      </Button>
+    );
   }
 
   if (serverOAuthUrl) {
@@ -94,27 +128,29 @@ export default function ServerInitializationSection({
 
   return (
     <div className="flex items-center gap-2">
-      {requiresOAuth && revokeOAuthForServer && (
+      {shouldShowRevoke && (
         <Button
           size="sm"
           variant="destructive"
-          onClick={() => revokeOAuthForServer(serverName)}
+          onClick={() => revokeOAuthForServer?.(serverName)}
           aria-label={localize('com_ui_revoke')}
         >
           <Trash2 className="h-4 w-4" />
           {localize('com_ui_revoke')}
         </Button>
       )}
-      <Button
-        variant={buttonVariant}
-        onClick={() => initializeServer(serverName, false)}
-        disabled={isServerInitializing}
-        size={sidePanel ? 'sm' : 'default'}
-        className="flex-1"
-      >
-        {icon}
-        {buttonText}
-      </Button>
+      {(shouldShowReinit || shouldShowInit) && (
+        <Button
+          variant={buttonVariant}
+          onClick={() => initializeServer(serverName, false)}
+          disabled={isServerInitializing}
+          size={sidePanel ? 'sm' : 'default'}
+          className="flex-1"
+        >
+          {icon}
+          {buttonText}
+        </Button>
+      )}
     </div>
   );
 }
