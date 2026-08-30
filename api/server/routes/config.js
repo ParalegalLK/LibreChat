@@ -131,7 +131,10 @@ function buildPublicSharePayload() {
   };
 
   if (typeof process.env.CUSTOM_FOOTER === 'string') {
-    payload.customFooter = process.env.CUSTOM_FOOTER;
+    payload.customFooter = process.env.CUSTOM_FOOTER.replace(
+      /{{\s*current_year\s*}}/gi,
+      String(new Date().getFullYear()),
+    );
   }
 
   return payload;
