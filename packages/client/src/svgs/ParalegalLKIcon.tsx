@@ -1,3 +1,4 @@
+import { JSX } from 'react/jsx-runtime';
 import { cn } from '~/utils';
 export default function ParalegalLKIcon({
   size = 25,
@@ -5,13 +6,13 @@ export default function ParalegalLKIcon({
 }: {
   size?: number;
   className?: string;
-}) {
+}): JSX.Element {
   return (
     <svg
       viewBox="0 0 512 512"
       width={size}
       height={size}
-      className={cn('fill-current text-black dark:text-white', className)}
+      className={cn('fill-current', className)}
       aria-hidden="true"
     >
       <g transform="translate(-71.680,-113.920) scale(1.280000)">

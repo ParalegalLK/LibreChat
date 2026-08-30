@@ -3,6 +3,7 @@ import type { ComponentType, SVGProps } from 'react';
 import GoogleMinimalIcon from '../../svgs/GoogleMinimalIcon';
 import CustomMinimalIcon from '../../svgs/CustomMinimalIcon';
 import AzureMinimalIcon from '../../svgs/AzureMinimalIcon';
+import ParalegalLKIcon from '../../svgs/ParalegalLKIcon';
 import AnthropicIcon from '../../svgs/AnthropicIcon';
 import MoonshotIcon from '../../svgs/MoonshotIcon';
 import BedrockIcon from '../../svgs/BedrockIcon';
@@ -116,6 +117,7 @@ export const providerIcons: Record<ProviderId, ProviderIconDef> = {
     label: 'Vercel',
     mono: true,
   },
+  [ProviderId.paralegal]: { art: component(ParalegalLKIcon), label: 'paralegal.lk', mono: true },
 };
 
 /** Merges any model level refinement over the base definition for a provider. */

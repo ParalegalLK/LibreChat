@@ -46,6 +46,8 @@ describe('resolveProviderId', () => {
     expect(resolveProviderId('vertexai')).toBe(ProviderId.google);
     expect(resolveProviderId('grok')).toBe(ProviderId.xai);
     expect(resolveProviderId('kimi')).toBe(ProviderId.moonshot);
+    expect(resolveProviderId('paralegal.lk')).toBe(ProviderId.paralegal);
+    expect(resolveProviderId('paralegal')).toBe(ProviderId.paralegal);
   });
 
   it('returns null for empty and unknown input', () => {
