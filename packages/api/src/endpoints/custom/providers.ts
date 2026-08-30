@@ -27,6 +27,7 @@ export const providerHosts: ReadonlyArray<readonly [string, ProviderId]> = [
   ['cognitiveservices.azure.com', ProviderId.azure],
   ['generativelanguage.googleapis.com', ProviderId.google],
   ['aiplatform.googleapis.com', ProviderId.google],
+  ['paralegal.lk', ProviderId.paralegal],
 ];
 
 /**
