@@ -43,6 +43,7 @@ export { default as GeminiIcon } from './GeminiIcon';
 export { default as GoogleMinimalIcon } from './GoogleMinimalIcon';
 export { default as AnthropicMinimalIcon } from './AnthropicMinimalIcon';
 export { default as ListeningIcon } from './ListeningIcon';
+export { default as StopRecordingIcon } from './StopRecordingIcon';
 export { default as VolumeIcon } from './VolumeIcon';
 export { default as VolumeMuteIcon } from './VolumeMuteIcon';
 export { default as SendMessageIcon } from './SendMessageIcon';

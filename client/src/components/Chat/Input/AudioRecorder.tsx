@@ -1,6 +1,11 @@
 import { memo } from 'react';
-import { MicOff } from 'lucide-react';
-import { IconButton, TooltipAnchor, ListeningIcon, Spinner } from '@librechat/client';
+import {
+  IconButton,
+  TooltipAnchor,
+  ListeningIcon,
+  StopRecordingIcon,
+  Spinner,
+} from '@librechat/client';
 import { useLocalize } from '~/hooks';
 
 export default memo(function AudioRecorder({
@@ -21,7 +26,7 @@ export default memo(function AudioRecorder({
 
   const renderIcon = () => {
     if (isListening) {
-      return <MicOff className="stroke-status-error" />;
+      return <StopRecordingIcon className="text-text-secondary" />;
     }
     if (isLoading) {
       return <Spinner className="stroke-text-secondary" />;
