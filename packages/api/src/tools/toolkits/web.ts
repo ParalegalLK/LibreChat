@@ -10,7 +10,7 @@ export function buildWebSearchContext(plannerPrompt?: string): string {
 
   return `# \`${Tools.web_search}\`:
 ${plannerSection}
-**Execute immediately without preface.** After search, provide a brief summary addressing the query directly, then structure your response with clear Markdown formatting (## headers, lists, tables). Cite sources properly, tailor tone to query type, and provide comprehensive details.
+Use this tool when the user's request calls for it, whether directly, indirectly, or implicitly, or when answering requires information that is current, real-time, or otherwise beyond your own knowledge; for questions you can answer reliably on your own, respond directly without searching. When searching, execute immediately without preface, then provide a brief summary addressing the query directly, then structure your response with clear Markdown formatting (## headers, lists, tables). Cite sources properly, tailor tone to query type, and provide comprehensive details.
 
 Use the conversation date/time from the dynamic runtime context when recency matters.
 

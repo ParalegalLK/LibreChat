@@ -105,7 +105,7 @@ Remove debug logs after validation.
 ## Apply/Deploy Steps
 1. `docker compose build api`
 2. `docker compose up -d api` (or restart API with updated image)
-3. `docker compose exec librechat-redis redis-cli FLUSHALL`
+3. `./scripts/flush-config-cache.sh`
 4. Hard refresh browser (`Ctrl+Shift+R`)
 5. Start a new conversation and test with web search ON
 

@@ -82,7 +82,7 @@ Use this when the proxy source folder exists on the same host:
 
 ```bash
 docker compose up -d --build firecrawl-allowlist-proxy
-docker compose exec librechat-redis redis-cli FLUSHALL
+./scripts/flush-config-cache.sh
 docker compose restart api
 ```
 
@@ -327,7 +327,7 @@ FIRECRAWL_VERSION=v2
 
 ```bash
 docker compose up -d --no-build api
-docker compose exec librechat-redis redis-cli FLUSHALL
+./scripts/flush-config-cache.sh
 docker compose restart api
 ```
 

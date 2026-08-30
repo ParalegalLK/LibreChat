@@ -189,7 +189,7 @@ Then hit the public URL (whatever your reverse proxy points at this server — e
 | `pull access denied` on `chat-paralegal-lk` | Not logged into GHCR, or PAT missing `read:packages`, or PAT not SSO-authorised for ParalegalLK | Redo step 2 |
 | API container keeps restarting, logs show missing env var | `.env` not copied over, or path wrong | Copy `.env` to `/home/paralegaluser/app/LibreChat/.env` (see step 4) |
 | 502 from reverse proxy | api container not bound to `0.0.0.0:3080` | Check `PORT` in `.env`, check `docker compose ps` output |
-| Chat UI shows stale config after editing `librechat.yaml` | Redis has cached the config | `docker compose exec librechat-redis redis-cli FLUSHALL && docker compose restart api`, then hard-refresh browser |
+| Chat UI shows stale config after editing `librechat.yaml` | Redis has cached the config | `./scripts/flush-config-cache.sh && docker compose restart api`, then hard-refresh browser |
 | Custom logo missing | `svgviewer-output.svg` / `minion-legal.png` not copied | Re-copy those files to `client/public/assets/` (step 4) |
 | “`ghcr.io/paralegallk/chat-paralegal:latest`” pulled instead of `chat-paralegal-lk` | `API_IMAGE` not set in `.env` (fell back to old default) | Set `API_IMAGE` in `.env` (step 5); `docker compose up -d` again |
 

@@ -147,7 +147,7 @@ docker compose exec mongodb mongosh --quiet --eval \
 After any `.env` changes, always run:
 
 ```bash
-docker compose exec librechat-redis redis-cli FLUSHALL
+./scripts/flush-config-cache.sh
 docker compose restart api
 ```
 

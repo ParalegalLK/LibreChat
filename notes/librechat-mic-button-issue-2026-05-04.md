@@ -51,7 +51,7 @@ docker compose logs --tail 120 api
 Then clear config cache (optional but recommended after speech/config changes):
 
 ```bash
-docker compose exec librechat-redis redis-cli FLUSHALL
+./scripts/flush-config-cache.sh
 docker compose restart api
 ```
 
