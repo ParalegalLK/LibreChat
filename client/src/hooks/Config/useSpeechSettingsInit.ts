@@ -12,6 +12,7 @@ export const APPLIED_SPEECH_CONFIG_KEY = 'appliedSpeechConfig';
 type SpeechSettingValue = string | number | boolean | null | undefined;
 type AppliedSpeechConfig = Record<string, SpeechSettingValue>;
 type SpeechConfigData = Record<string, SpeechSettingValue> & {
+  message?: string;
   sttExternal?: boolean;
   ttsExternal?: boolean;
 };
@@ -45,8 +46,10 @@ function readAppliedConfig(): AppliedSpeechConfig {
  * stored preference wins.
  */
 export default function useSpeechSettingsInit(isAuthenticated: boolean) {
-  const { data } = useGetCustomConfigSpeechQuery({ enabled: isAuthenticated });
+  const { data, isError, isFetched } = useGetCustomConfigSpeechQuery({ enabled: isAuthenticated });
+  const [engineSTT, setEngineSTT] = useRecoilState<string>(store.engineSTT);
   const [engineTTS, setEngineTTS] = useRecoilState<string>(store.engineTTS);
+  const setSpeechSettingsInitialized = useSetRecoilState(store.speechSettingsInitialized);
 
   const setters = useRef({
     conversationMode: useSetRecoilState(store.conversationMode),
@@ -54,7 +57,7 @@ export default function useSpeechSettingsInit(isAuthenticated: boolean) {
     speechToText: useSetRecoilState(store.speechToText),
     textToSpeech: useSetRecoilState(store.textToSpeech),
     cacheTTS: useSetRecoilState(store.cacheTTS),
-    engineSTT: useSetRecoilState(store.engineSTT),
+    engineSTT: setEngineSTT,
     languageSTT: useSetRecoilState(store.languageSTT),
     autoTranscribeAudio: useSetRecoilState(store.autoTranscribeAudio),
     decibelValue: useSetRecoilState(store.decibelValue),
@@ -68,30 +71,75 @@ export default function useSpeechSettingsInit(isAuthenticated: boolean) {
   }).current;
 
   useEffect(() => {
-    if (!isAuthenticated || !data || data.message === 'not_found') return;
+    if (!isAuthenticated) {
+      setSpeechSettingsInitialized(false);
+      return;
+    }
 
-    logger.log('Initializing speech settings from config:', data);
+    if (!isFetched) return;
 
-    const applied = readAppliedConfig();
-    const nextApplied: AppliedSpeechConfig = {};
+    if (
+      isError &&
+      (localStorage.getItem('engineSTT') === null || localStorage.getItem('engineTTS') === null)
+    ) {
+      setSpeechSettingsInitialized(false);
+      return;
+    }
 
-    Object.entries(withEngineDefaults(data)).forEach(([key, value]) => {
-      if (SKIPPED_KEYS.has(key)) return;
+    const effectiveConfig =
+      data && data.message !== 'not_found' ? withEngineDefaults(data) : undefined;
 
-      const setter = setters[key as keyof typeof setters];
-      if (!setter) return;
+    if (effectiveConfig) {
+      logger.log('Initializing speech settings from config:', data);
 
-      nextApplied[key] = value;
+      const applied = readAppliedConfig();
+      const nextApplied: AppliedSpeechConfig = {};
 
-      const unchangedSinceApplied = key in applied && applied[key] === value;
-      if (unchangedSinceApplied && localStorage.getItem(key) !== null) return;
+      Object.entries(effectiveConfig).forEach(([key, value]) => {
+        if (SKIPPED_KEYS.has(key)) return;
 
-      logger.log(`Applying speech setting from config: ${key} = ${value}`);
-      setter(value as never);
-    });
+        const setter = setters[key as keyof typeof setters];
+        if (!setter) return;
 
-    localStorage.setItem(APPLIED_SPEECH_CONFIG_KEY, JSON.stringify(nextApplied));
-  }, [isAuthenticated, data, setters]);
+        nextApplied[key] = value;
+
+        const unchangedSinceApplied = key in applied && applied[key] === value;
+        if (unchangedSinceApplied && localStorage.getItem(key) !== null) return;
+
+        logger.log(`Applying speech setting from config: ${key} = ${value}`);
+        setter(value as never);
+      });
+
+      localStorage.setItem(APPLIED_SPEECH_CONFIG_KEY, JSON.stringify(nextApplied));
+    }
+
+    const hasSavedEngineSTT = localStorage.getItem('engineSTT') !== null;
+    const hasSavedEngineTTS = localStorage.getItem('engineTTS') !== null;
+    const configuredEngineSTT = hasSavedEngineSTT ? engineSTT : effectiveConfig?.engineSTT;
+    const configuredEngineTTS = hasSavedEngineTTS ? engineTTS : effectiveConfig?.engineTTS;
+    const sttExternalUnavailable = data?.sttExternal != null && !data.sttExternal;
+    const ttsExternalUnavailable = data?.ttsExternal != null && !data.ttsExternal;
+
+    if (sttExternalUnavailable && configuredEngineSTT === STTEndpoints.external) {
+      setEngineSTT(STTEndpoints.browser);
+    }
+    if (ttsExternalUnavailable && configuredEngineTTS === TTSEndpoints.external) {
+      setEngineTTS(TTSEndpoints.browser);
+    }
+
+    setSpeechSettingsInitialized(true);
+  }, [
+    data,
+    engineSTT,
+    engineTTS,
+    isAuthenticated,
+    isError,
+    isFetched,
+    setEngineSTT,
+    setEngineTTS,
+    setSpeechSettingsInitialized,
+    setters,
+  ]);
 
   useEffect(() => {
     if (VALID_TTS_ENGINES.includes(engineTTS)) return;

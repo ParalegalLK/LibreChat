@@ -1,7 +1,7 @@
 import { memo } from 'react';
-import { TooltipAnchor, ListeningIcon, Spinner } from '@librechat/client';
+import { MicOff } from 'lucide-react';
+import { IconButton, TooltipAnchor, ListeningIcon, Spinner } from '@librechat/client';
 import { useLocalize } from '~/hooks';
-import { cn } from '~/utils';
 
 export default memo(function AudioRecorder({
   disabled,
@@ -17,60 +17,37 @@ export default memo(function AudioRecorder({
   onStop: () => void;
 }) {
   const localize = useLocalize();
+  const label = isListening ? localize('com_ui_stop_recording') : localize('com_ui_use_micrphone');
 
-  if (isListening) {
-    return (
-      <TooltipAnchor
-        description={localize('com_ui_stop_recording')}
-        render={
-          <button
-            id="audio-recorder"
-            type="button"
-            data-testid="stop-recording-button"
-            aria-label={localize('com_ui_stop_recording')}
-            aria-pressed="true"
-            onClick={onStop}
-            className="flex size-9 items-center justify-center rounded-full bg-text-primary p-1 transition-all duration-200 hover:opacity-80"
-          >
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              className="icon-lg text-surface-primary"
-              aria-hidden="true"
-            >
-              <rect x="7" y="7" width="10" height="10" rx="1.25" fill="currentColor" />
-            </svg>
-          </button>
-        }
-      />
-    );
-  }
+  const renderIcon = () => {
+    if (isListening) {
+      return <MicOff className="stroke-status-error" />;
+    }
+    if (isLoading) {
+      return <Spinner className="stroke-text-secondary" />;
+    }
+    return <ListeningIcon className="stroke-text-secondary" />;
+  };
 
   return (
     <TooltipAnchor
-      description={localize('com_ui_use_micrphone')}
+      description={label}
       render={
-        <button
+        <IconButton
           id="audio-recorder"
           type="button"
-          aria-label={localize('com_ui_use_micrphone')}
-          aria-pressed="false"
-          onClick={onStart}
-          disabled={disabled || isLoading}
-          className={cn(
-            'flex size-9 items-center justify-center rounded-full p-1 transition-colors hover:bg-surface-hover',
-          )}
-          title={localize('com_ui_use_micrphone')}
+          variant="ghost"
+          size="theme"
+          shape="theme"
+          label={label}
+          data-testid={isListening ? 'stop-recording-button' : undefined}
+          onClick={isListening ? onStop : onStart}
+          disabled={!isListening && (disabled || isLoading)}
+          className="p-1 hover:bg-surface-composer-hover"
+          aria-pressed={isListening}
         >
-          {isLoading ? (
-            <Spinner className="stroke-text-secondary" />
-          ) : (
-            <ListeningIcon className="stroke-text-secondary" />
-          )}
-        </button>
+          {renderIcon()}
+        </IconButton>
       }
     />
   );
