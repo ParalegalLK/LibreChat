@@ -1,11 +1,15 @@
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 const { webcrypto } = require('node:crypto');
 require('module-alias/register');
 const moduleAlias = require('module-alias');
 
 const basePath = path.resolve(__dirname, '..', 'api');
 moduleAlias.addAlias('~', basePath);
+
+// Register Mongoose models before any ~/models methods are used (post-upgrade refactor)
+require('@librechat/data-schemas').createModels(mongoose);
 
 const connect = require('./connect');
 
@@ -70,6 +74,7 @@ const sendPasswordReset = async (email, expiryHours = 0.25) => {
           appName: process.env.APP_TITLE || 'LibreChat',
           name: user.name || user.username || user.email,
           link: link,
+          expiry: expiryLabel,
           year: new Date().getFullYear(),
         },
         template: 'requestPasswordReset.handlebars',
