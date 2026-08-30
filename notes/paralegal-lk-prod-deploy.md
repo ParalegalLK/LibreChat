@@ -3,7 +3,7 @@
 Date: 2026-08-30
 Repo: `/home/paralegaluser/app/LibreChat`
 
-Three customisations were introduced on dev on 2026-08-30. Each has a **code part** (ships in the
+Four customisations were introduced on dev on 2026-08-30. Each has a **code part** (ships in the
 Docker image) and/or a **config part** (`librechat.yaml` / `.env`, which are **not in git** and must be
 edited by hand on the prod server):
 
@@ -12,6 +12,7 @@ edited by hand on the prod server):
 | 1 | paralegal.lk provider icon | yes — commit "Wire up paralegal.lk provider icon" | `librechat.yaml` iconURL/groupIcon |
 | 2 | Footer "AI can make mistakes \| © paralegal.lk {{current_year}}" | yes — `api/server/routes/config.js` | `.env` `CUSTOM_FOOTER` |
 | 3 | Shared firm system prompt on every model | no | `librechat.yaml` `promptPrefix` on all specs |
+| 4 | `-preview` model labels + friendly "Message Researcher Silva" placeholder | no | `librechat.yaml` `label` / `modelLabel` on the paralegal.lk specs |
 
 **Order matters:** deploy the new image first, then edit config. Each section below says why.
 
@@ -34,6 +35,7 @@ pushed to GHCR (the dev host is already logged in to `ghcr.io`).
 | Icon (#1) | Merged into `dev` — commit "Wire up paralegal.lk provider icon", in PR #12 (`1686a3af7`). The current `:latest` image (`1686a3af7`) already contains it. |
 | Footer year (#2) | Committed on branch `feat/footer-current-year` — commit `1afa071d4` "Substitute {{current_year}} in CUSTOM_FOOTER" (`api/server/routes/config.js` + test). Needs PR → `dev` → PR `dev` → `prod` (see `CLAUDE.md` workflow), then an image build (0.2). **Not in any pushed image yet.** On the dev server it is only hot-patched into the running container (`docker cp`), so dev loses it on `docker compose down && up`. |
 | Prompt (#3) | No code. |
+| Labels (#4) | No code. |
 
 ## 0.2 Build and push the image (on the dev host, from the commit you want on prod)
 
@@ -295,6 +297,112 @@ Restore the backup yaml, flush cache, restart api.
 
 ---
 
+# Part 4 — `-preview` Model Labels and Friendly "Message …" Placeholder
+
+Two related label changes on the paralegal.lk specs, config only.
+
+## 4.1 What each label controls
+
+There are three different labels per spec, and they show up in different places:
+
+| Field | Where | Shown as |
+|---|---|---|
+| `modelSpecs.list[].label` | model selector row | `translator-siriwardena-preview` |
+| `modelSpecs.list[].preset.modelLabel` | chat box placeholder "Message X", and the `sender` name on every response | `Translator Siriwardena` |
+| `endpoints.custom[].modelDisplayLabel` | fallback for the same "Message X" / sender, only if `modelLabel` is unset | `Translator Siriwardena` |
+
+The sender chain is `modelLabel` → spec `label` → endpoint `modelDisplayLabel`
+(`getEphemeralSender` in `packages/data-provider/src/parsers.ts`, used by both the client placeholder
+`client/src/hooks/Conversations/useGetSender.ts` and the server `packages/api/src/agents/sender.ts`).
+That is why prod currently shows "Message researcher-silva-2": the spec `label` beats
+`modelDisplayLabel`. Setting `preset.modelLabel` puts the friendly name first without touching the
+selector text. `modelLabel` is stripped before the request reaches the backend agent
+(`packages/api/src/utils/llm.ts`), so the paralegal.lk services never see it.
+
+## 4.2 Target values for prod
+
+Only the three prod-facing specs. **Do not add the reviewer (`reviewer-thambiah-test`) to prod** —
+it is a dev-only test model.
+
+| Spec | `label` (selector) | `preset.modelLabel` ("Message X") | `preset.model` (unchanged — must match the backend) |
+|---|---|---|---|
+| `silva-01` | `researcher-silva-2` (unchanged) | `Researcher Silva` | `researcher-silva-2` |
+| `siriwardena-01` | `translator-siriwardena-preview` (was `translator-siriwardena-1`) | `Translator Siriwardena` | `translator-siriwardena-1` |
+| `weeramantry-01` | `drafter-weeramantry-preview` (was `drafter-weeramantry`) | `Drafter Weeramantry` | `weeramantry-drafter` |
+
+Only `label` and `modelLabel` change. `preset.model` and `preset.endpoint` stay exactly as they are —
+they are what gets sent to the backend service.
+
+## Prod Steps
+
+1. Back up, then edit `librechat.yaml` on the prod server:
+
+   ```bash
+   cp librechat.yaml librechat.yaml.bak-$(date +%F)
+   sed -i 's/label: "translator-siriwardena-1"/label: "translator-siriwardena-preview"/' librechat.yaml
+   sed -i 's/label: "drafter-weeramantry"/label: "drafter-weeramantry-preview"/' librechat.yaml
+   sed -i 's/^\(\s*\)model: "researcher-silva-2"$/&\n\1modelLabel: "Researcher Silva"/' librechat.yaml
+   sed -i 's/^\(\s*\)model: "translator-siriwardena-1"$/&\n\1modelLabel: "Translator Siriwardena"/' librechat.yaml
+   sed -i 's/^\(\s*\)model: "weeramantry-drafter"$/&\n\1modelLabel: "Drafter Weeramantry"/' librechat.yaml
+   ```
+
+   The `model:` seds only match lines that are exactly the preset model line, so the
+   `default: [...]` lists under `endpoints.custom` are untouched. Resulting shape:
+
+   ```yaml
+   modelSpecs:
+     list:
+       - name: "siriwardena-01"
+         label: "translator-siriwardena-preview"
+         preset:
+           endpoint: "translator-siriwardena"
+           model: "translator-siriwardena-1"
+           modelLabel: "Translator Siriwardena"
+           promptPrefix: *firmPrompt
+       - name: "weeramantry-01"
+         label: "drafter-weeramantry-preview"
+         preset:
+           endpoint: "drafter-weeramantry"
+           model: "weeramantry-drafter"
+           modelLabel: "Drafter Weeramantry"
+           promptPrefix: *firmPrompt
+   ```
+
+   (`silva-01` keeps `label: "researcher-silva-2"` and gains `modelLabel: "Researcher Silva"`.)
+
+2. Validate:
+
+   ```bash
+   python3 -c "
+   import yaml; specs = yaml.safe_load(open('librechat.yaml'))['modelSpecs']['list']
+   for s in specs[:3]: print(s['name'], '|', s['label'], '|', s['preset'].get('modelLabel'), '|', s['preset']['model'])"
+   # expect:
+   # silva-01 | researcher-silva-2 | Researcher Silva | researcher-silva-2
+   # siriwardena-01 | translator-siriwardena-preview | Translator Siriwardena | translator-siriwardena-1
+   # weeramantry-01 | drafter-weeramantry-preview | Drafter Weeramantry | weeramantry-drafter
+   ```
+
+3. Apply:
+
+   ```bash
+   ./scripts/flush-config-cache.sh
+   docker compose restart api
+   ```
+
+4. Hard-refresh and **start a new conversation** — existing conversations keep their saved preset
+   (no `modelLabel`), so they will still show the old placeholder and old sender name; that is
+   expected. In a new conversation check:
+   - selector rows read `researcher-silva-2`, `translator-siriwardena-preview`,
+     `drafter-weeramantry-preview`;
+   - the empty chat box reads `Message Translator Siriwardena` (etc.), not the selector label;
+   - the response bubble's sender name is `Translator Siriwardena`.
+
+## Rollback
+Restore the backup yaml, flush cache, restart api. No image change involved, so the yaml can go
+in before or after the image — there is no ordering constraint for this part.
+
+---
+
 # Combined Prod Checklist
 
 ```bash
@@ -306,8 +414,9 @@ cp .env .env.bak-$(date +%F)
 # 1. new image first, then prove it has the code (Part 0.3)
 docker compose pull api && docker compose up -d api
 
-# 2. config edits (icons, footer, prompt) as described above
-#    - librechat.yaml: iconURL/groupIcon "paralegal", promptPrefix on all specs
+# 2. config edits (icons, footer, prompt, labels) as described above
+#    - librechat.yaml: iconURL/groupIcon "paralegal", promptPrefix on all specs,
+#      -preview labels + modelLabel on the 3 paralegal.lk specs (no reviewer on prod)
 #    - .env: CUSTOM_FOOTER with {{current_year}}
 
 # 3. .env needs a recreate; yaml needs a cache flush
@@ -335,8 +444,9 @@ failed - strategy not registered`, and every SSO login shows "unknown error"
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3080/oauth/openid   # expect 302 (redirect to Asgardeo), not 500
 ```
 
-Then in the browser (Ctrl+Shift+R, new conversation): icon in model selector, footer text with the
-current year, and the model knows the user's name / date / Sri Lanka jurisdiction.
+Then in the browser (Ctrl+Shift+R, new conversation): icon in model selector, `-preview` labels on
+translator/drafter, chat box says `Message Researcher Silva` (not the selector label), footer text
+with the current year, and the model knows the user's name / date / Sri Lanka jurisdiction.
 
 ## Combined Rollback
 ```bash
