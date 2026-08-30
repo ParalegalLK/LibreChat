@@ -9,6 +9,10 @@ const router = express.Router();
 const S3_URL_PATTERN = /^https:\/\/paralegal-(prod|decisions)\.s3(\.[a-z0-9-]+)?\.amazonaws\.com\//;
 const READER_URL_PREFIX = 'https://reader.paralegal.lk/?file=';
 const DEFAULT_PDF_GENERATOR_URL = 'https://www.dev.paralegal.lk/api/pdf/get-pdf-url';
+/** Refresh the cached service token this long before it actually expires. */
+const SERVICE_TOKEN_SKEW_MS = 30 * 1000;
+/** Lifetime to assume when the token endpoint omits `expires_in`. */
+const SERVICE_TOKEN_DEFAULT_TTL_SECONDS = 300;
 
 const getGeneratorUrl = () =>
   process.env.PDF_GENERATOR_URL ||
@@ -40,11 +44,160 @@ const isAllowedPdfLink = (link) => {
   }
 };
 
-const getAsgardeoAccessToken = (req) =>
+/**
+ * Asgardeo access token belonging to the signed-in user. Only present when the
+ * session was established through the OpenID login (not email + password).
+ */
+const getUserAsgardeoAccessToken = (req) =>
   req.user?.federatedTokens?.access_token ||
   req.session?.openidTokens?.accessToken ||
   req.cookies?.openid_access_token ||
   '';
+
+let serviceTokenCache = { token: '', expiresAt: 0 };
+
+const clearServiceTokenCache = () => {
+  serviceTokenCache = { token: '', expiresAt: 0 };
+};
+
+const resolveTokenEndpoint = async () => {
+  if (process.env.PDF_GENERATOR_TOKEN_URL) {
+    return process.env.PDF_GENERATOR_TOKEN_URL;
+  }
+
+  const issuer = process.env.OPENID_ISSUER;
+  if (!issuer) {
+    return '';
+  }
+
+  // Asgardeo's issuer *is* its token endpoint (…/oauth2/token).
+  if (/\/oauth2\/token\/?$/.test(issuer)) {
+    return issuer;
+  }
+
+  const discoveryUrl = new URL(
+    '.well-known/openid-configuration',
+    issuer.endsWith('/') ? issuer : `${issuer}/`,
+  );
+  const response = await fetch(discoveryUrl);
+  const config = await response.json().catch(() => ({}));
+  return config?.token_endpoint || '';
+};
+
+/**
+ * Service-level credential used when the user has no Asgardeo token of their own
+ * (email + password sign-ins, break-glass admin, etc.). Resolution order:
+ *   1. `PDF_GENERATOR_SERVICE_TOKEN` (static bearer token)
+ *   2. OAuth2 client-credentials grant against Asgardeo, using
+ *      `PDF_GENERATOR_CLIENT_ID/SECRET` or falling back to `OPENID_CLIENT_ID/SECRET`
+ * Returns '' when nothing is configured or the grant fails; the request is still
+ * forwarded to the generator without an Authorization header.
+ */
+const getServiceAccessToken = async () => {
+  if (process.env.PDF_GENERATOR_SERVICE_TOKEN) {
+    return process.env.PDF_GENERATOR_SERVICE_TOKEN;
+  }
+
+  const clientId = process.env.PDF_GENERATOR_CLIENT_ID || process.env.OPENID_CLIENT_ID;
+  const clientSecret = process.env.PDF_GENERATOR_CLIENT_SECRET || process.env.OPENID_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return '';
+  }
+
+  if (serviceTokenCache.token && serviceTokenCache.expiresAt > Date.now()) {
+    return serviceTokenCache.token;
+  }
+
+  try {
+    const tokenEndpoint = await resolveTokenEndpoint();
+    if (!tokenEndpoint) {
+      logger.warn('[pdf.open] No token endpoint available for service credentials');
+      return '';
+    }
+
+    const body = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+    if (process.env.PDF_GENERATOR_SERVICE_SCOPE) {
+      body.set('scope', process.env.PDF_GENERATOR_SERVICE_SCOPE);
+    }
+
+    const response = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data?.access_token) {
+      logger.warn('[pdf.open] Service credential token request failed', {
+        status: response.status,
+        error: data?.error || data?.error_description,
+      });
+      return '';
+    }
+
+    const ttlSeconds = Number(data.expires_in) || SERVICE_TOKEN_DEFAULT_TTL_SECONDS;
+    serviceTokenCache = {
+      token: data.access_token,
+      expiresAt: Date.now() + ttlSeconds * 1000 - SERVICE_TOKEN_SKEW_MS,
+    };
+    return serviceTokenCache.token;
+  } catch (error) {
+    logger.warn('[pdf.open] Error requesting service credential token', {
+      error: error?.message,
+    });
+    return '';
+  }
+};
+
+/**
+ * Picks the bearer token to present to the generator.
+ * @returns {Promise<{ token: string, source: 'user' | 'service' | 'none' }>}
+ */
+const resolveGeneratorAccessToken = async (req) => {
+  const userToken = getUserAsgardeoAccessToken(req);
+  if (userToken) {
+    return { token: userToken, source: 'user' };
+  }
+
+  const serviceToken = await getServiceAccessToken();
+  if (serviceToken) {
+    return { token: serviceToken, source: 'service' };
+  }
+
+  return { token: '', source: 'none' };
+};
+
+/**
+ * Browser-identifying headers so the generator sees the call as coming from the
+ * chat app, not a bare Node process. Forwards what the browser sent; falls back
+ * to `PDF_GENERATOR_ORIGIN` / `DOMAIN_CLIENT` for Origin and Referer.
+ */
+const getForwardedHeaders = (req) => {
+  const fallbackOrigin = (
+    process.env.PDF_GENERATOR_ORIGIN ||
+    process.env.DOMAIN_CLIENT ||
+    ''
+  ).replace(/\/+$/, '');
+  const origin = req.get('origin') || fallbackOrigin;
+  const referer = req.get('referer') || (fallbackOrigin ? `${fallbackOrigin}/` : '');
+  const userAgent = req.get('user-agent');
+
+  const headers = {};
+  if (origin) {
+    headers.Origin = origin;
+  }
+  if (referer) {
+    headers.Referer = referer;
+  }
+  if (userAgent) {
+    headers['User-Agent'] = userAgent;
+  }
+  return headers;
+};
 
 const splitList = (value = '') =>
   value
@@ -74,6 +227,11 @@ const getOpenIdRoleToken = (req) => {
   return req.session?.openidTokens?.idToken || req.cookies?.openid_id_token || '';
 };
 
+/**
+ * Re-checks the Asgardeo group claim for SSO sessions. Users who signed in with
+ * email + password have no Asgardeo claims to check; they are governed by
+ * `requireJwtAuth` and the local allowlist instead.
+ */
 const checkAsgardeoGroupAccess = (req) => {
   const requiredRoles = splitList(process.env.OPENID_REQUIRED_ROLE || '');
 
@@ -82,7 +240,7 @@ const checkAsgardeoGroupAccess = (req) => {
   }
 
   if (req.user?.provider !== 'openid') {
-    return { allowed: false, source: 'non_openid_user', requiredRoles };
+    return { allowed: true, source: 'local_login', requiredRoles };
   }
 
   const token = getOpenIdRoleToken(req);
@@ -152,31 +310,20 @@ router.post('/open', async (req, res) => {
   }
 
   const generatorUrl = getGeneratorUrl() || DEFAULT_PDF_GENERATOR_URL;
-  const asgardeoAccessToken = getAsgardeoAccessToken(req);
+  const { token: accessToken, source: tokenSource } = await resolveGeneratorAccessToken(req);
 
-  if (!asgardeoAccessToken) {
-    logger.warn('[pdf.open] Missing Asgardeo access token for PDF generator', {
-      user: req.user?.email,
-      userId: req.user?.id || req.user?._id?.toString(),
-      provider: req.user?.provider,
-    });
-    return res.status(401).json({
-      success: false,
-      message: 'Asgardeo access token required',
-    });
+  const headers = { 'Content-Type': 'application/json', ...getForwardedHeaders(req) };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
   }
-
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${asgardeoAccessToken}`,
-  };
 
   try {
     logger.info('[pdf.open] Requesting presigned PDF URL', {
       user: req.user?.email,
       userId: req.user?.id || req.user?._id?.toString(),
+      provider: req.user?.provider,
       generatorUrl,
-      hasAsgardeoAccessToken: Boolean(asgardeoAccessToken),
+      tokenSource,
     });
 
     const response = await fetch(generatorUrl, {
@@ -188,15 +335,21 @@ router.post('/open', async (req, res) => {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok || !data?.success || !data?.presigned_url) {
+      const isAuthFailure = response.status === 401 || response.status === 403;
+      if (isAuthFailure && tokenSource === 'service') {
+        // Token was rejected upstream; don't keep serving it from cache.
+        clearServiceTokenCache();
+      }
+
       logger.error('[pdf.open] PDF generator failed', {
         user: req.user?.email,
         userId: req.user?.id || req.user?._id?.toString(),
         status: response.status,
+        tokenSource,
         generatorSuccess: data?.success,
         generatorError: data?.error || data?.message,
       });
-      const status = response.status === 401 || response.status === 403 ? response.status : 502;
-      return res.status(status).json({
+      return res.status(isAuthFailure ? response.status : 502).json({
         success: false,
         message: 'Failed to generate PDF link',
       });
