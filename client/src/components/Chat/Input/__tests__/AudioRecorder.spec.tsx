@@ -24,11 +24,8 @@ jest.mock('@librechat/client', () => ({
   ),
   TooltipAnchor: ({ render }: { render: React.ReactElement }) => render,
   ListeningIcon: () => <span data-testid="listening-icon" />,
+  StopRecordingIcon: () => <span data-testid="stop-recording-icon" />,
   Spinner: () => <span data-testid="spinner" />,
-}));
-
-jest.mock('lucide-react', () => ({
-  MicOff: () => <span data-testid="mic-off-icon" />,
 }));
 
 jest.mock('~/hooks', () => ({
@@ -73,7 +70,7 @@ describe('AudioRecorder', () => {
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(onStart).not.toHaveBeenCalled();
     expect(button).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('mic-off-icon')).toBeInTheDocument();
+    expect(screen.getByTestId('stop-recording-icon')).toBeInTheDocument();
   });
 
   it('shows loading and blocks starting while idle', () => {
