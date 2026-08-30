@@ -1,7 +1,7 @@
 import { OptionTypes } from 'librechat-data-provider';
+import { Label, TextareaAutosize, HoverCard, HoverCardTrigger } from '@librechat/client';
 import type { DynamicSettingProps } from 'librechat-data-provider';
 import { useLocalize, useDebouncedInput, useParameterEffects, TranslationKeys } from '~/hooks';
-import { Label, TextareaAutosize, HoverCard, HoverCardTrigger } from '@librechat/client';
 import { useChatContext } from '~/Providers';
 import OptionHover from './OptionHover';
 import { ESide } from '~/common';
@@ -26,7 +26,9 @@ function DynamicTextarea({
   const localize = useLocalize();
   const { preset } = useChatContext();
 
-  const [setInputValue, inputValue, setLocalValue] = useDebouncedInput<string | null>({
+  const [setInputValue, inputValue, setLocalValue, flushInputValue] = useDebouncedInput<
+    string | null
+  >({
     optionKey: settingKey,
     initialValue:
       optionType !== OptionTypes.Custom
@@ -56,7 +58,7 @@ function DynamicTextarea({
           <div className="flex w-full justify-between">
             <Label
               htmlFor={`${settingKey}-dynamic-textarea`}
-              className="text-left text-sm font-medium"
+              className="text-left text-xs font-medium"
             >
               {labelCode ? (localize(label as TranslationKeys) ?? label) : label || settingKey}{' '}
               {showDefault && (
@@ -75,6 +77,9 @@ function DynamicTextarea({
             disabled={readonly}
             value={inputValue ?? ''}
             onChange={setInputValue}
+            /** Clicking Save blurs this first, so the pending edit is committed
+             *  before submitPreset reads the preset. */
+            onBlur={flushInputValue}
             aria-label={localize(label as TranslationKeys)}
             placeholder={
               placeholderCode
@@ -82,8 +87,7 @@ function DynamicTextarea({
                 : placeholder
             }
             className={cn(
-              // TODO: configurable max height
-              'flex max-h-[138px] min-h-[100px] w-full resize-none rounded-lg bg-surface-secondary px-3 py-2 focus:outline-none',
+              'flex max-h-[138px] min-h-[100px] w-full resize-none rounded-lg border border-border-light bg-surface-secondary px-3 py-2 text-sm focus:outline-none',
             )}
           />
         </HoverCardTrigger>

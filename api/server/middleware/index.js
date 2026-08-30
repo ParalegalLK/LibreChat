@@ -1,9 +1,15 @@
 const validatePasswordReset = require('./validatePasswordReset');
+const setTwoFactorTempUser = require('./setTwoFactorTempUser');
 const validateRegistration = require('./validateRegistration');
 const buildEndpointOption = require('./buildEndpointOption');
+const validateEmailLogin = require('./validateEmailLogin');
 const validateMessageReq = require('./validateMessageReq');
+const {
+  canReadActiveJobConversation,
+  prepareMessageRequestValidation,
+  sendValidationResponse,
+} = require('./messageValidation');
 const checkDomainAllowed = require('./checkDomainAllowed');
-const concurrentLimiter = require('./concurrentLimiter');
 const requireLocalAuth = require('./requireLocalAuth');
 const canDeleteAccount = require('./canDeleteAccount');
 const accessResources = require('./accessResources');
@@ -11,6 +17,7 @@ const requireLdapAuth = require('./requireLdapAuth');
 const abortMiddleware = require('./abortMiddleware');
 const checkInviteUser = require('./checkInviteUser');
 const requireJwtAuth = require('./requireJwtAuth');
+const { requireRumProxyAuth } = require('./requireJwtAuth');
 const configMiddleware = require('./config/app');
 const validateModel = require('./validateModel');
 const moderateText = require('./moderateText');
@@ -37,15 +44,20 @@ module.exports = {
   moderateText,
   validateModel,
   requireJwtAuth,
+  requireRumProxyAuth,
+  setTwoFactorTempUser,
   checkInviteUser,
   requireLdapAuth,
   requireLocalAuth,
   canDeleteAccount,
   configMiddleware,
-  concurrentLimiter,
   checkDomainAllowed,
   validateMessageReq,
+  canReadActiveJobConversation,
+  sendValidationResponse,
+  prepareMessageRequestValidation,
   buildEndpointOption,
   validateRegistration,
   validatePasswordReset,
+  validateEmailLogin,
 };

@@ -1,9 +1,9 @@
 import { useContext, useMemo, useState } from 'react';
-import DOMPurify from 'dompurify';
 import useSWR from 'swr';
 import { Md5 } from 'ts-md5';
 import { ThemeContext, isDark } from '@librechat/client';
 import type { MermaidConfig } from 'mermaid';
+import { inlineFlowchartConfig, sanitizeMermaidSvg } from '~/utils/mermaid';
 
 // Constants
 const MD5_LENGTH_THRESHOLD = 10_000;
@@ -33,6 +33,8 @@ interface UseMermaidOptions {
   theme?: string;
   /** Custom mermaid configuration */
   config?: Partial<MermaidConfig>;
+  /** Whether rendering should run */
+  enabled?: boolean;
 }
 
 interface UseMermaidReturn {
@@ -51,6 +53,7 @@ export const useMermaid = ({
   id = DEFAULT_ID_PREFIX,
   theme: customTheme,
   config,
+  enabled = true,
 }: UseMermaidOptions): UseMermaidReturn => {
   const { theme } = useContext(ThemeContext);
   const isDarkMode = isDark(theme);
@@ -59,7 +62,11 @@ export const useMermaid = ({
   const [validContent, setValidContent] = useState<string>('');
 
   // Generate cache key based on content, theme, and ID
-  const cacheKey = useMemo((): string => {
+  const cacheKey = useMemo((): string | null => {
+    if (!enabled) {
+      return null;
+    }
+
     // For large diagrams, use MD5 hash instead of full content
     const contentHash = content.length < MD5_LENGTH_THRESHOLD ? content : Md5.hashStr(content);
 
@@ -67,7 +74,7 @@ export const useMermaid = ({
     const themeKey = customTheme || (isDarkMode ? 'd' : 'l');
 
     return [id, themeKey, contentHash].filter(Boolean).join('-');
-  }, [content, id, isDarkMode, customTheme]);
+  }, [content, enabled, id, isDarkMode, customTheme]);
 
   // Generate unique diagram ID (mermaid requires unique IDs in the DOM)
   // Include cacheKey to regenerate when content/theme changes, preventing mermaid internal conflicts
@@ -85,12 +92,12 @@ export const useMermaid = ({
     return {
       startOnLoad: false,
       theme: (customTheme as MermaidConfig['theme']) || defaultTheme,
-      // Spread custom config but override security settings after
       ...config,
-      // Security hardening - these MUST come last to prevent override
-      securityLevel: 'strict', // Highest security: disables click, sanitizes text
-      maxTextSize: config?.maxTextSize ?? 50000, // Limit text size to prevent DoS
-      maxEdges: config?.maxEdges ?? 500, // Limit edges to prevent DoS
+      flowchart: { ...inlineFlowchartConfig, ...config?.flowchart, htmlLabels: false },
+      // Security hardening: MUST come after ...config spread to prevent override
+      securityLevel: 'strict',
+      maxTextSize: config?.maxTextSize ?? 50000,
+      maxEdges: config?.maxEdges ?? 500,
     };
   }, [customTheme, isDarkMode, config]);
 
@@ -130,20 +137,7 @@ export const useMermaid = ({
       // Render to SVG
       const { svg } = await mermaidInstance.render(diagramId, content);
 
-      // Sanitize SVG output with DOMPurify for additional security
-      const purify = DOMPurify();
-      const sanitizedSvg = purify.sanitize(svg, {
-        USE_PROFILES: { svg: true, svgFilters: true },
-        // Allow additional elements used by mermaid for text rendering
-        ADD_TAGS: ['foreignObject', 'use', 'switch'],
-        ADD_ATTR: [
-          'dominant-baseline',
-          'text-anchor',
-          'requiredFeatures',
-          'systemLanguage',
-          'xmlns:xlink',
-        ],
-      });
+      const sanitizedSvg = sanitizeMermaidSvg(svg);
 
       // Store as last valid content
       setValidContent(sanitizedSvg);

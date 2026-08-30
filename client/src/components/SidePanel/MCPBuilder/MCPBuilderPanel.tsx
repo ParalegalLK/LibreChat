@@ -1,15 +1,38 @@
-import { useState, useRef, useMemo } from 'react';
-import { Plus, Search } from 'lucide-react';
-import { PermissionTypes, Permissions } from 'librechat-data-provider';
-import { Button, Spinner, OGDialogTrigger, Input } from '@librechat/client';
-import { useLocalize, useMCPServerManager, useHasAccess } from '~/hooks';
-import MCPServerList from './MCPServerList';
-import MCPServerDialog from './MCPServerDialog';
+import { useState, useRef, useMemo, useEffect } from 'react';
+import { Plus } from 'lucide-react';
+import { useRecoilValue } from 'recoil';
+import { useLocation } from 'react-router-dom';
+import { SystemRoles, PermissionTypes, Permissions } from 'librechat-data-provider';
+import { Button, FilterInput, OGDialogTrigger, TooltipAnchor } from '@librechat/client';
+import {
+  useLocalize,
+  useMCPServerManager,
+  useHasAccess,
+  useAuthContext,
+  activateCatalog,
+} from '~/hooks';
 import MCPConfigDialog from '~/components/MCP/MCPConfigDialog';
+import { PanelFooter, PanelContent } from '~/components/ui';
+import MCPServerCardSkeleton from './MCPServerCardSkeleton';
 import MCPAdminSettings from './MCPAdminSettings';
+import MCPServerDialog from './MCPServerDialog';
+import MCPServerList from './MCPServerList';
+import store from '~/store';
 
 export default function MCPBuilderPanel() {
   const localize = useLocalize();
+  const location = useLocation();
+  /** The panel stays mounted while the sidebar is hidden (collapsed, mobile
+   * drawer, or the insights route collapsing it), so only a visible panel
+   * releases its catalog ahead of the background warmup schedule */
+  const sidebarExpanded = useRecoilValue(store.sidebarExpanded);
+  const panelVisible = sidebarExpanded && !location.pathname.startsWith('/insights');
+  useEffect(() => {
+    if (panelVisible) {
+      activateCatalog('mcpServers');
+    }
+  }, [panelVisible]);
+  const { user } = useAuthContext();
   const { availableMCPServers, isLoading, getServerStatusIconProps, getConfigDialogProps } =
     useMCPServerManager();
 
@@ -36,55 +59,71 @@ export default function MCPBuilderPanel() {
   }, [availableMCPServers, searchQuery]);
 
   return (
-    <div className="flex h-full w-full flex-col overflow-visible">
-      <div role="region" aria-label="MCP Builder" className="mt-2 space-y-2">
-        {/* Admin Settings Button */}
-        <MCPAdminSettings />
-
-        {/* Search Input */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" />
-          <Input
+    <div
+      role="region"
+      aria-label={localize('com_ui_mcp_servers')}
+      className="flex h-full w-full flex-col overflow-hidden pt-2"
+    >
+      {/* Sticky header: Search + Add Button */}
+      <div className="shrink-0 px-3 pb-2">
+        <div className="flex items-center gap-2">
+          <FilterInput
+            inputId="mcp-filter"
+            label={localize('com_ui_filter_mcp_servers')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={localize('com_ui_filter_mcp_servers')}
-            className="pl-9"
-            aria-label={localize('com_ui_filter_mcp_servers')}
+            containerClassName="flex-1"
           />
+          {hasCreateAccess && (
+            <MCPServerDialog
+              open={showDialog}
+              onOpenChange={setShowDialog}
+              triggerRef={addButtonRef}
+            >
+              <OGDialogTrigger asChild>
+                <TooltipAnchor
+                  description={localize('com_ui_add_mcp')}
+                  side="bottom"
+                  render={
+                    <Button
+                      ref={addButtonRef}
+                      variant="outline"
+                      size="icon"
+                      className="size-9 shrink-0 bg-transparent"
+                      onClick={() => setShowDialog(true)}
+                      aria-label={localize('com_ui_add_mcp')}
+                    >
+                      <Plus className="size-4" aria-hidden="true" />
+                    </Button>
+                  }
+                />
+              </OGDialogTrigger>
+            </MCPServerDialog>
+          )}
         </div>
-
-        {hasCreateAccess && (
-          <MCPServerDialog open={showDialog} onOpenChange={setShowDialog} triggerRef={addButtonRef}>
-            <OGDialogTrigger asChild>
-              <div className="flex w-full justify-end">
-                <Button
-                  ref={addButtonRef}
-                  variant="outline"
-                  className="w-full bg-transparent"
-                  onClick={() => setShowDialog(true)}
-                >
-                  <Plus className="size-4" aria-hidden />
-                  {localize('com_ui_add_mcp')}
-                </Button>
-              </div>
-            </OGDialogTrigger>
-          </MCPServerDialog>
-        )}
-
-        {/* Server List */}
-        {isLoading ? (
-          <div className="flex items-center justify-center p-8">
-            <Spinner className="h-6 w-6" />
-          </div>
-        ) : (
-          <MCPServerList
-            servers={filteredServers}
-            getServerStatusIconProps={getServerStatusIconProps}
-            isFiltered={searchQuery.trim().length > 0}
-          />
-        )}
-        {configDialogProps && <MCPConfigDialog {...configDialogProps} />}
       </div>
+
+      {/* Only the list scrolls */}
+      <PanelContent
+        isLoading={isLoading}
+        skeleton={<MCPServerCardSkeleton />}
+        className="px-3 pb-3"
+      >
+        <MCPServerList
+          servers={filteredServers}
+          getServerStatusIconProps={getServerStatusIconProps}
+          isFiltered={searchQuery.trim().length > 0}
+        />
+      </PanelContent>
+
+      {/* Config Dialog for custom user vars */}
+      {configDialogProps && <MCPConfigDialog {...configDialogProps} />}
+
+      {user?.role === SystemRoles.ADMIN && (
+        <PanelFooter>
+          <MCPAdminSettings />
+        </PanelFooter>
+      )}
     </div>
   );
 }

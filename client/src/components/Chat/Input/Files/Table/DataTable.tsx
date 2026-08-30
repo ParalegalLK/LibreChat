@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Search } from 'lucide-react';
 import { useSetRecoilState } from 'recoil';
+import { FileContext } from 'librechat-data-provider';
 import {
   flexRender,
   useReactTable,
@@ -9,15 +9,7 @@ import {
   getFilteredRowModel,
   getPaginationRowModel,
 } from '@tanstack/react-table';
-import type {
-  ColumnDef,
-  SortingState,
-  VisibilityState,
-  ColumnFiltersState,
-} from '@tanstack/react-table';
-import { FileContext } from 'librechat-data-provider';
 import {
-  Input,
   Table,
   Button,
   Spinner,
@@ -26,9 +18,16 @@ import {
   TableCell,
   TableHead,
   TrashIcon,
+  FilterInput,
   TableHeader,
   useMediaQuery,
 } from '@librechat/client';
+import type {
+  ColumnDef,
+  SortingState,
+  VisibilityState,
+  ColumnFiltersState,
+} from '@tanstack/react-table';
 import type { TFile } from 'librechat-data-provider';
 import { ColumnVisibilityDropdown } from './ColumnVisibilityDropdown';
 import { useDeleteFilesFromTable } from '~/hooks/Files';
@@ -111,27 +110,17 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
           {isDeleting ? (
             <Spinner className="size-3.5 sm:size-4" />
           ) : (
-            <TrashIcon className="size-3.5 text-red-400 sm:size-4" />
+            <TrashIcon className="size-3.5 text-text-destructive sm:size-4" />
           )}
           {!isSmallScreen && <span className="ml-2">{localize('com_ui_delete')}</span>}
         </Button>
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-text-secondary" />
-          <Input
-            id="files-filter"
-            placeholder=" "
-            value={(table.getColumn('filename')?.getFilterValue() as string | undefined) ?? ''}
-            onChange={(event) => table.getColumn('filename')?.setFilterValue(event.target.value)}
-            className="peer w-full pl-10 text-sm focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label={localize('com_files_filter_input')}
-          />
-          <label
-            htmlFor="files-filter"
-            className="pointer-events-none absolute left-10 top-1/2 -translate-y-1/2 text-sm text-text-secondary transition-all duration-200 peer-focus:top-0 peer-focus:bg-background peer-focus:px-1 peer-focus:text-xs peer-[:not(:placeholder-shown)]:top-0 peer-[:not(:placeholder-shown)]:bg-background peer-[:not(:placeholder-shown)]:px-1 peer-[:not(:placeholder-shown)]:text-xs"
-          >
-            {localize('com_files_filter')}
-          </label>
-        </div>
+        <FilterInput
+          inputId="files-filter"
+          label={localize('com_files_filter')}
+          value={(table.getColumn('filename')?.getFilterValue() as string | undefined) ?? ''}
+          onChange={(event) => table.getColumn('filename')?.setFilterValue(event.target.value)}
+          containerClassName="flex-1"
+        />
         <div className="relative focus-within:z-[100]">
           <ColumnVisibilityDropdown
             table={table}
@@ -140,7 +129,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
           />
         </div>
       </div>
-      <div className="relative grid h-full max-h-[calc(100vh-20rem)] min-h-[calc(100vh-20rem)] w-full flex-1 overflow-hidden overflow-x-auto overflow-y-auto rounded-md border border-black/10 dark:border-white/10">
+      <div className="relative grid h-full max-h-[calc(100vh-20rem)] min-h-[calc(100vh-20rem)] w-full flex-1 overflow-hidden overflow-x-auto overflow-y-auto rounded-md border border-border-light">
         <Table className="w-full min-w-[300px] border-separate border-spacing-0">
           <TableHeader className="sticky top-0 z-50">
             {table.getHeaderGroups().map((headerGroup) => (
@@ -207,7 +196,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
       </div>
 
       <div className="flex items-center justify-end gap-2 py-4">
-        <div className="ml-2 flex-1 truncate text-xs text-muted-foreground sm:ml-4 sm:text-sm">
+        <div className="ml-2 flex-1 truncate text-xs text-text-secondary sm:ml-4 sm:text-sm">
           <span className="hidden sm:inline">
             {localize('com_files_number_selected', {
               0: `${table.getFilteredSelectedRowModel().rows.length}`,

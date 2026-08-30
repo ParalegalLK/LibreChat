@@ -1,16 +1,18 @@
-import { memo, useMemo, useState, useCallback } from 'react';
-import { useAtom } from 'jotai';
-import type { MouseEvent } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useId } from 'react';
+import { useAtomValue } from 'jotai';
 import { ContentTypes } from 'librechat-data-provider';
-import { ThinkingContent, ThinkingButton } from './Thinking';
+import type { MouseEvent, FocusEvent } from 'react';
+import { ThinkingContent, ThinkingButton, FloatingThinkingBar } from './Thinking';
+import { useLocalize, useExpandCollapse, useLazyCollapseBody } from '~/hooks';
+import useSmoothStreaming from '~/hooks/Messages/useSmoothStreaming';
 import { showThinkingAtom } from '~/store/showThinking';
 import { useMessageContext } from '~/Providers';
-import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
 type ReasoningProps = {
   reasoning: string;
   isLast: boolean;
+  reasoningLabel?: string;
 };
 
 /**
@@ -35,10 +37,17 @@ type ReasoningProps = {
  *
  * For legacy text-based messages, see Thinking.tsx component.
  */
-const Reasoning = memo(({ reasoning, isLast }: ReasoningProps) => {
+const Reasoning = memo((props: ReasoningProps) => {
+  const { reasoning, isLast, reasoningLabel } = props;
+  const contentId = useId();
   const localize = useLocalize();
-  const [showThinking] = useAtom(showThinkingAtom);
+  const showThinking = useAtomValue(showThinkingAtom);
+  const smoothStreaming = useSmoothStreaming();
   const [isExpanded, setIsExpanded] = useState(showThinking);
+  const [isBarVisible, setIsBarVisible] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { style: expandStyle, ref: expandRef } = useExpandCollapse(isExpanded);
+  const { shouldRenderBody, mountBody, handleTransitionEnd } = useLazyCollapseBody(isExpanded);
   const { isSubmitting, isLatestMessage, nextType } = useMessageContext();
 
   // Strip <think> tags from the reasoning content (modern format)
@@ -49,45 +58,99 @@ const Reasoning = memo(({ reasoning, isLast }: ReasoningProps) => {
       .trim();
   }, [reasoning]);
 
-  const handleClick = useCallback((e: MouseEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    setIsExpanded((prev) => !prev);
+  const handleClick = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      mountBody();
+      setIsExpanded((prev) => !prev);
+    },
+    [mountBody],
+  );
+
+  const handleFocus = useCallback(() => {
+    setIsBarVisible(true);
+  }, []);
+
+  const handleBlur = useCallback((e: FocusEvent) => {
+    if (!containerRef.current?.contains(e.relatedTarget as Node)) {
+      setIsBarVisible(false);
+    }
+  }, []);
+
+  const handleMouseEnter = useCallback(() => {
+    setIsBarVisible(true);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    if (!containerRef.current?.contains(document.activeElement)) {
+      setIsBarVisible(false);
+    }
   }, []);
 
   const effectiveIsSubmitting = isLatestMessage ? isSubmitting : false;
 
-  const label = useMemo(
-    () =>
-      effectiveIsSubmitting && isLast ? localize('com_ui_thinking') : localize('com_ui_thoughts'),
-    [effectiveIsSubmitting, localize, isLast],
-  );
+  const label = useMemo(() => {
+    const generated = reasoningLabel?.trim();
+    if (generated) {
+      return generated;
+    }
+    return effectiveIsSubmitting && isLast
+      ? localize('com_ui_thinking')
+      : localize('com_ui_thoughts');
+  }, [effectiveIsSubmitting, isLast, localize, reasoningLabel]);
 
   if (!reasoningText) {
     return null;
   }
 
   return (
-    <div className="group/reasoning">
+    <div
+      ref={containerRef}
+      className="group/reasoning"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+    >
       <div className="group/thinking-container">
-        <div className="sticky top-0 z-10 mb-2 bg-presentation pb-2 pt-2">
+        <div className="mb-2 pb-2 pt-2">
           <ThinkingButton
             isExpanded={isExpanded}
             onClick={handleClick}
             label={label}
             content={reasoningText}
+            contentId={contentId}
+            animateLabel={
+              smoothStreaming && effectiveIsSubmitting && Boolean(reasoningLabel?.trim())
+            }
           />
         </div>
         <div
-          className={cn(
-            'grid transition-all duration-300 ease-out',
-            nextType !== ContentTypes.THINK && isExpanded && 'mb-4',
-          )}
-          style={{
-            gridTemplateRows: isExpanded ? '1fr' : '0fr',
-          }}
+          id={contentId}
+          role="group"
+          aria-label={label}
+          aria-hidden={!isExpanded || undefined}
+          className={cn(nextType !== ContentTypes.THINK && isExpanded && 'mb-4')}
+          style={expandStyle}
+          onTransitionEnd={handleTransitionEnd}
         >
-          <div className="overflow-hidden">
-            <ThinkingContent>{reasoningText}</ThinkingContent>
+          <div className="relative overflow-hidden" ref={expandRef}>
+            {shouldRenderBody && (
+              <>
+                <ThinkingContent
+                  animate={smoothStreaming && effectiveIsSubmitting && isLast && isExpanded}
+                >
+                  {reasoningText}
+                </ThinkingContent>
+                <FloatingThinkingBar
+                  isVisible={isBarVisible && isExpanded}
+                  isExpanded={isExpanded}
+                  onClick={handleClick}
+                  content={reasoningText}
+                  contentId={contentId}
+                />
+              </>
+            )}
           </div>
         </div>
       </div>

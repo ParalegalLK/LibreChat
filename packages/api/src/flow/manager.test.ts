@@ -1,5 +1,5 @@
 import { Keyv } from 'keyv';
-import { FlowStateManager } from './manager';
+import { FlowStateManager, PENDING_STALE_MS } from './manager';
 import { FlowState } from './types';
 
 jest.mock('@librechat/data-schemas', () => ({
@@ -24,7 +24,6 @@ class MockKeyv<T = string> {
     return this.store.get(key);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async set(key: string, value: FlowState<T>, _ttl?: number): Promise<true> {
     this.store.set(key, value);
     return true;
@@ -72,6 +71,24 @@ describe('FlowStateManager', () => {
       expect(result2).toBe('result');
     });
 
+    it('should return the externally completed result when handler loses completion race', async () => {
+      const flowId = 'race-flow';
+      const type = 'test-type';
+
+      const result = await flowManager.createFlowWithHandler(flowId, type, async () => {
+        await flowManager.completeFlow(flowId, type, 'fresh-result');
+        return 'stale-result';
+      });
+
+      expect(result).toBe('fresh-result');
+      await expect(flowManager.getFlowState(flowId, type)).resolves.toEqual(
+        expect.objectContaining({
+          status: 'COMPLETED',
+          result: 'fresh-result',
+        }),
+      );
+    });
+
     it('should handle flow timeout correctly', async () => {
       const flowId = 'timeout-flow';
       const type = 'test-type';
@@ -85,6 +102,29 @@ describe('FlowStateManager', () => {
       const flowPromise = shortTtlManager.createFlow(flowId, type);
 
       await expect(flowPromise).rejects.toThrow('test-type flow timed out');
+    });
+
+    it('should retain a terminal timeout for the remaining storage TTL', async () => {
+      const flowId = 'retained-timeout-flow';
+      const type = 'mcp_oauth';
+      const shortTimeoutManager = new FlowStateManager(store as unknown as Keyv, {
+        ttl: 5000,
+        monitorTimeout: 100,
+        retainedFailureTypes: ['mcp_oauth'],
+        ci: true,
+      });
+
+      await expect(shortTimeoutManager.createFlow(flowId, type)).rejects.toThrow(
+        'mcp_oauth flow timed out',
+      );
+
+      await expect(shortTimeoutManager.getFlowState(flowId, type)).resolves.toEqual(
+        expect.objectContaining({
+          status: 'FAILED',
+          error: 'mcp_oauth flow timed out',
+          failedAt: expect.any(Number),
+        }),
+      );
     });
 
     it('should maintain flow state consistency under high concurrency', async () => {
@@ -157,7 +197,111 @@ describe('FlowStateManager', () => {
       await flowManager.failFlow(flowId, type, new Error('failure'));
 
       await expect(flowPromise).rejects.toThrow('failure');
+      await expect(flowManager.getFlowState(flowId, type)).resolves.toBeUndefined();
     }, 15000);
+
+    it('should retain configured failed flow types for status polling', async () => {
+      const flowId = 'retained-failure-flow';
+      const type = 'mcp_oauth';
+      const retainedManager = new FlowStateManager(store as unknown as Keyv, {
+        ttl: 5000,
+        retainedFailureTypes: [type],
+        ci: true,
+      });
+      const flowPromise = retainedManager.createFlow(flowId, type);
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await retainedManager.failFlow(flowId, type, new Error('provider rejected request'));
+
+      await expect(flowPromise).rejects.toThrow('provider rejected request');
+      await expect(retainedManager.getFlowState(flowId, type)).resolves.toEqual(
+        expect.objectContaining({ status: 'FAILED', error: 'provider rejected request' }),
+      );
+    }, 15000);
+
+    it('should not overwrite a completed flow with a late failure', async () => {
+      const flowId = 'completed-race-flow';
+      const type = 'test-type';
+      const flowKey = `${type}:${flowId}`;
+
+      await flowManager.initFlow(flowId, type);
+      await flowManager.completeFlow(flowId, type, 'success');
+
+      const result = await flowManager.failFlow(flowId, type, new Error('late failure'));
+      const state = await store.get(flowKey);
+
+      expect(result).toBe(true);
+      expect(state).toMatchObject({
+        status: 'COMPLETED',
+        result: 'success',
+      });
+      expect(state?.error).toBeUndefined();
+    });
+  });
+
+  describe('initFlow', () => {
+    const flowId = 'init-test-flow';
+    const type = 'test-type';
+    const flowKey = `${type}:${flowId}`;
+
+    it('stores a PENDING flow state in the cache', async () => {
+      await flowManager.initFlow(flowId, type, { serverName: 'test' });
+
+      const state = await store.get(flowKey);
+      expect(state).toBeDefined();
+      expect(state!.status).toBe('PENDING');
+      expect(state!.type).toBe(type);
+      expect(state!.metadata).toEqual({ serverName: 'test' });
+      expect(state!.createdAt).toBeGreaterThan(0);
+    });
+
+    it('overwrites an existing flow state', async () => {
+      await store.set(flowKey, {
+        type,
+        status: 'COMPLETED',
+        metadata: { old: true },
+        createdAt: Date.now() - 10000,
+      });
+
+      await flowManager.initFlow(flowId, type, { new: true });
+
+      const state = await store.get(flowKey);
+      expect(state!.status).toBe('PENDING');
+      expect(state!.metadata).toEqual({ new: true });
+    });
+
+    it('allows createFlow to find and monitor the pre-stored state', async () => {
+      // initFlow stores the PENDING state
+      await flowManager.initFlow(flowId, type, { preStored: true });
+
+      // createFlow should find the existing state and start monitoring
+      const flowPromise = flowManager.createFlow(flowId, type);
+
+      // Complete the flow so the monitor resolves
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await flowManager.completeFlow(flowId, type, 'success');
+
+      const result = await flowPromise;
+      expect(result).toBe('success');
+    }, 15000);
+
+    it('passes the configured TTL to keyv.set', async () => {
+      const setSpy = jest.spyOn(store, 'set');
+
+      await flowManager.initFlow(flowId, type, { serverName: 'test' });
+
+      expect(setSpy).toHaveBeenCalledWith(
+        flowKey,
+        expect.objectContaining({ status: 'PENDING' }),
+        30000,
+      );
+    });
+
+    it('propagates store write failures', async () => {
+      jest.spyOn(store, 'set').mockRejectedValueOnce(new Error('Store write failed'));
+
+      await expect(flowManager.initFlow(flowId, type)).rejects.toThrow('Store write failed');
+    });
   });
 
   describe('deleteFlow', () => {
@@ -901,21 +1045,21 @@ describe('FlowStateManager', () => {
       expect(result2.isStale).toBe(false);
     });
 
-    it('uses default threshold of 2 minutes when not specified', async () => {
-      const timestamp = Date.now() - 3 * 60 * 1000; // 3 minutes ago
+    it('uses the default PENDING_STALE_MS threshold when not specified', async () => {
+      const timestamp = Date.now() - (PENDING_STALE_MS + 60 * 1000); // just past the default
       await store.set(flowKey, {
         type,
         status: 'COMPLETED',
         metadata: {},
-        createdAt: Date.now() - 5 * 60 * 1000,
+        createdAt: Date.now() - (PENDING_STALE_MS + 3 * 60 * 1000),
         completedAt: timestamp,
       });
 
-      // Should use default 2 minute threshold
+      // Should use the default PENDING_STALE_MS threshold
       const result = await flowManager.isFlowStale(flowId, type);
 
       expect(result.isStale).toBe(true);
-      expect(result.age).toBeGreaterThan(2 * 60 * 1000);
+      expect(result.age).toBeGreaterThan(PENDING_STALE_MS);
     });
 
     it('falls back to createdAt when completedAt/failedAt are not present', async () => {

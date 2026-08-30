@@ -1,6 +1,9 @@
 import React, { useState, useRef, useLayoutEffect, useCallback, memo } from 'react';
 import { useLocalize } from '~/hooks';
 
+/** Matches the `inset-y-1` the single-row indicator uses. */
+const INDICATOR_INSET = 4;
+
 interface Option {
   value: string;
   label: string;
@@ -13,20 +16,33 @@ interface RadioProps {
   onChange?: (value: string) => void;
   disabled?: boolean;
   className?: string;
+  buttonClassName?: string;
   fullWidth?: boolean;
+  /** Lets the segments flow onto a second row instead of overflowing their
+   *  container. A `whitespace-nowrap` label plus `px-4` gives every segment a hard
+   *  minimum width, so five of them (translated labels are longer still) push past a
+   *  dialog's width on a phone and the choices past the edge become unreachable.
+   *  The moving indicator follows across rows; the single-row default is untouched. */
+  wrap?: boolean;
+  'aria-labelledby'?: string;
 }
 
-const Radio = memo(function Radio({
+const Radio: React.NamedExoticComponent<RadioProps> = memo(function Radio({
   options,
   value,
   onChange,
   disabled = false,
   className = '',
+  buttonClassName = '',
   fullWidth = false,
+  wrap = false,
+  'aria-labelledby': ariaLabelledBy,
 }: RadioProps) {
   const localize = useLocalize();
-  const [currentValue, setCurrentValue] = useState<string>(value ?? '');
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [isMounted, setIsMounted] = useState(false);
+  const [currentValue, setCurrentValue] = useState<string>(value ?? '');
   const [backgroundStyle, setBackgroundStyle] = useState<React.CSSProperties>({});
 
   const handleChange = (newValue: string) => {
@@ -36,23 +52,46 @@ const Radio = memo(function Radio({
 
   const updateBackgroundStyle = useCallback(() => {
     const selectedIndex = options.findIndex((opt) => opt.value === currentValue);
-    if (selectedIndex >= 0 && buttonRefs.current[selectedIndex]) {
-      const selectedButton = buttonRefs.current[selectedIndex];
-      const container = selectedButton?.parentElement;
-      if (selectedButton && container) {
-        const containerRect = container.getBoundingClientRect();
-        const buttonRect = selectedButton.getBoundingClientRect();
-        const offsetLeft = buttonRect.left - containerRect.left - 4;
-        setBackgroundStyle({
-          width: `${buttonRect.width}px`,
-          transform: `translateX(${offsetLeft}px)`,
-        });
-      }
+    const selectedButton = buttonRefs.current[selectedIndex];
+    if (selectedIndex < 0 || !selectedButton) {
+      return;
     }
-  }, [currentValue, options]);
+    // offsetWidth/offsetLeft are layout metrics: unlike getBoundingClientRect they
+    // are not distorted by the dialog's open transform (scale), and they resolve to
+    // whole pixels, so the indicator matches its segment and keeps crisp borders.
+    if (!wrap) {
+      setBackgroundStyle({
+        width: `${selectedButton.offsetWidth}px`,
+        transform: `translateX(${selectedButton.offsetLeft}px)`,
+      });
+      return;
+    }
+    // Wrapped, the indicator also has to move vertically, so it carries its own
+    // height rather than stretching between the container's insets. INDICATOR_INSET
+    // reproduces the `inset-y-1` of the single-row default exactly, so switching a
+    // group to `wrap` does not change how it looks on a row that still fits.
+    setBackgroundStyle({
+      width: `${selectedButton.offsetWidth}px`,
+      height: `${selectedButton.offsetHeight - INDICATOR_INSET * 2}px`,
+      transform: `translate(${selectedButton.offsetLeft}px, ${
+        selectedButton.offsetTop + INDICATOR_INSET
+      }px)`,
+    });
+  }, [currentValue, options, wrap]);
 
+  // Measure before paint and re-measure on any later layout change (the dialog's
+  // open animation settling, a window resize). A fixed timeout previously raced
+  // the dialog transition and left the indicator mis-sized.
   useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
     updateBackgroundStyle();
+    setIsMounted(true);
+    const observer = new ResizeObserver(() => updateBackgroundStyle());
+    observer.observe(container);
+    return () => observer.disconnect();
   }, [updateBackgroundStyle]);
 
   useLayoutEffect(() => {
@@ -64,10 +103,11 @@ const Radio = memo(function Radio({
   if (options.length === 0) {
     return (
       <div
-        className="relative inline-flex items-center rounded-lg bg-muted p-1 opacity-50"
+        className="relative inline-flex items-center rounded-lg bg-surface-tertiary p-1 opacity-50"
         role="radiogroup"
+        aria-labelledby={ariaLabelledBy}
       >
-        <span className="px-4 py-2 text-xs text-muted-foreground">
+        <span className="px-4 py-2 text-xs text-text-secondary">
           {localize('com_ui_no_options')}
         </span>
       </div>
@@ -78,12 +118,18 @@ const Radio = memo(function Radio({
 
   return (
     <div
-      className={`relative ${fullWidth ? 'flex' : 'inline-flex'} items-center rounded-lg bg-muted p-1 ${className}`}
+      ref={containerRef}
+      className={`relative ${fullWidth ? 'flex' : 'inline-flex'} ${
+        wrap ? 'flex-wrap' : ''
+      } items-center rounded-lg bg-surface-tertiary px-1 ${className}`}
       role="radiogroup"
+      aria-labelledby={ariaLabelledBy}
     >
-      {selectedIndex >= 0 && (
+      {selectedIndex >= 0 && isMounted && (
         <div
-          className="pointer-events-none absolute inset-y-1 rounded-md border border-border/50 bg-background shadow-sm transition-all duration-300 ease-out"
+          className={`pointer-events-none absolute left-0 rounded-md border border-border-light bg-surface-primary shadow-sm transition-all duration-300 ease-out ${
+            wrap ? 'top-0' : 'inset-y-1'
+          }`}
           style={backgroundStyle}
         />
       )}
@@ -98,9 +144,9 @@ const Radio = memo(function Radio({
           aria-checked={currentValue === option.value}
           onClick={() => handleChange(option.value)}
           disabled={disabled}
-          className={`relative z-10 flex h-[34px] items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-            currentValue === option.value ? 'text-foreground' : 'text-foreground'
-          } ${disabled ? 'cursor-not-allowed opacity-50' : ''} ${fullWidth ? 'flex-1' : ''}`}
+          className={`relative z-10 flex h-[34px] items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary ${
+            currentValue === option.value ? 'text-text-primary' : 'text-text-secondary'
+          } ${disabled ? 'cursor-not-allowed opacity-50' : ''} ${fullWidth ? 'flex-1' : ''} ${buttonClassName}`}
         >
           {option.icon && (
             <span className="flex-shrink-0" aria-hidden="true">

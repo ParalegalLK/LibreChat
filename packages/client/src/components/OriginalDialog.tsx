@@ -1,60 +1,99 @@
 import * as React from 'react';
-import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
+import { JSX } from 'react/jsx-runtime';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cn } from '~/utils';
+
+const DialogDepthContext = React.createContext(0);
+
+/** Current OGDialog nesting depth (0 when rendered outside any dialog). */
+export const useDialogDepth = (): number => React.useContext(DialogDepthContext);
+
+/**
+ * z-index for a portaled popover so it renders above the dialog it lives in.
+ * Outside any dialog (depth 0) it falls back to a low default (50).
+ */
+export const usePopoverZIndex = (): number => {
+  const depth = useDialogDepth();
+  if (depth <= 0) {
+    return 50;
+  }
+  const contentZIndex = 140 + (depth - 1) * 60;
+  return contentZIndex + 10;
+};
 
 interface OGDialogProps extends DialogPrimitive.DialogProps {
   triggerRef?: React.RefObject<HTMLButtonElement | HTMLInputElement | HTMLDivElement | null>;
   triggerRefs?: React.RefObject<HTMLButtonElement | HTMLInputElement | HTMLDivElement | null>[];
 }
 
-const Dialog = React.forwardRef<HTMLDivElement, OGDialogProps>(
-  ({ children, triggerRef, triggerRefs, onOpenChange, ...props }, ref) => {
-    const handleOpenChange = (open: boolean) => {
-      if (!open && triggerRef?.current) {
-        setTimeout(() => {
-          triggerRef.current?.focus();
-        }, 0);
-      }
-      if (triggerRefs?.length) {
-        triggerRefs.forEach((ref) => {
-          if (ref?.current) {
-            setTimeout(() => {
-              ref.current?.focus();
-            }, 0);
-          }
-        });
-      }
-      onOpenChange?.(open);
-    };
+const Dialog: React.ForwardRefExoticComponent<OGDialogProps & React.RefAttributes<HTMLDivElement>> =
+  React.forwardRef<HTMLDivElement, OGDialogProps>(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ({ children, triggerRef, triggerRefs, onOpenChange, ...props }, ref) => {
+      const parentDepth = React.useContext(DialogDepthContext);
+      const currentDepth = parentDepth + 1;
 
-    return (
-      <DialogPrimitive.Root {...props} onOpenChange={handleOpenChange}>
-        {children}
-      </DialogPrimitive.Root>
-    );
-  },
-);
+      const handleOpenChange = (open: boolean) => {
+        if (!open && triggerRef?.current) {
+          setTimeout(() => {
+            triggerRef.current?.focus();
+          }, 0);
+        }
+        if (triggerRefs?.length) {
+          triggerRefs.forEach((ref) => {
+            if (ref?.current) {
+              setTimeout(() => {
+                ref.current?.focus();
+              }, 0);
+            }
+          });
+        }
+        onOpenChange?.(open);
+      };
 
-const DialogTrigger = DialogPrimitive.Trigger;
+      return (
+        <DialogDepthContext.Provider value={currentDepth}>
+          <DialogPrimitive.Root {...props} onOpenChange={handleOpenChange}>
+            {children}
+          </DialogPrimitive.Root>
+        </DialogDepthContext.Provider>
+      );
+    },
+  );
 
-const DialogPortal = DialogPrimitive.Portal;
+const DialogTrigger: React.ForwardRefExoticComponent<
+  DialogPrimitive.DialogTriggerProps & React.RefAttributes<HTMLButtonElement>
+> = DialogPrimitive.Trigger;
 
-const DialogClose = DialogPrimitive.Close;
+const DialogPortal: React.FC<DialogPrimitive.DialogPortalProps> = DialogPrimitive.Portal;
 
-export const DialogOverlay = React.forwardRef<
+const DialogClose: React.ForwardRefExoticComponent<
+  DialogPrimitive.DialogCloseProps & React.RefAttributes<HTMLButtonElement>
+> = DialogPrimitive.Close;
+
+export const DialogOverlay: React.ForwardRefExoticComponent<
+  Omit<DialogPrimitive.DialogOverlayProps & React.RefAttributes<HTMLDivElement>, 'ref'> &
+    React.RefAttributes<HTMLDivElement>
+> = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
->(({ className, ...props }, ref) => (
-  <DialogPrimitive.Overlay
-    ref={ref}
-    className={cn(
-      'fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
-      className,
-    )}
-    {...props}
-  />
-));
+>(({ className, style, ...props }, ref) => {
+  const depth = React.useContext(DialogDepthContext);
+  const overlayZIndex = 130 + (depth - 1) * 60;
+
+  return (
+    <DialogPrimitive.Overlay
+      ref={ref}
+      style={{ ...style, zIndex: overlayZIndex }}
+      className={cn(
+        'fixed inset-0 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+        className,
+      )}
+      {...props}
+    />
+  );
+});
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
@@ -63,49 +102,56 @@ type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.
   overlayClassName?: string;
 };
 
-const DialogContent = React.forwardRef<
-  React.ElementRef<typeof DialogPrimitive.Content>,
-  DialogContentProps
->(
+const DialogContent: React.ForwardRefExoticComponent<
+  Omit<DialogPrimitive.DialogContentProps & React.RefAttributes<HTMLDivElement>, 'ref'> & {
+    showCloseButton?: boolean;
+    disableScroll?: boolean;
+    overlayClassName?: string;
+  } & React.RefAttributes<HTMLDivElement>
+> = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(
   (
     {
       className,
       overlayClassName,
       showCloseButton = true,
       children,
+      style,
       onEscapeKeyDown: propsOnEscapeKeyDown,
       ...props
     },
     ref,
   ) => {
+    const depth = React.useContext(DialogDepthContext);
+    const contentZIndex = 140 + (depth - 1) * 60;
 
-    /* Handle Escape key to prevent closing dialog if a tooltip or dropdown is open 
+    /* Handle Escape key to prevent closing dialog if a tooltip or dropdown has focus
     (this is a workaround in order to achieve WCAG compliance which requires
     that our tooltips be dismissable with Escape key) */
     const handleEscapeKeyDown = React.useCallback(
       (event: KeyboardEvent) => {
-        const tooltips = document.querySelectorAll('.tooltip');
-        const dropdownMenus = document.querySelectorAll('[role="menu"]');
+        const activeElement = document.activeElement;
 
-        for (const tooltip of tooltips) {
-          const style = window.getComputedStyle(tooltip);
-          if (
-            style.display !== 'none' &&
-            style.visibility !== 'hidden' &&
-            parseFloat(style.opacity) > 0
-          ) {
+        // Check if active element is a trigger with an open popover (aria-expanded="true")
+        if (activeElement?.getAttribute('aria-expanded') === 'true') {
+          event.preventDefault();
+          return;
+        }
+
+        // Check if a dropdown menu, listbox, or combobox has focus (focus is within it)
+        const popoverElements = document.querySelectorAll(
+          '[role="menu"], [role="listbox"], [role="combobox"]',
+        );
+        for (const popover of popoverElements) {
+          if (popover.contains(activeElement)) {
             event.preventDefault();
             return;
           }
         }
 
-        for (const dropdownMenu of dropdownMenus) {
-          const style = window.getComputedStyle(dropdownMenu);
-          if (
-            style.display !== 'none' &&
-            style.visibility !== 'hidden' &&
-            parseFloat(style.opacity) > 0
-          ) {
+        // Check if a tooltip has focus (focus is within it)
+        const tooltips = document.querySelectorAll('.tooltip');
+        for (const tooltip of tooltips) {
+          if (tooltip.contains(activeElement)) {
             event.preventDefault();
             return;
           }
@@ -121,16 +167,17 @@ const DialogContent = React.forwardRef<
         <DialogOverlay className={overlayClassName} />
         <DialogPrimitive.Content
           ref={ref}
+          style={{ ...style, zIndex: contentZIndex }}
           onEscapeKeyDown={handleEscapeKeyDown}
           className={cn(
-            'max-w-11/12 fixed left-[50%] top-[50%] z-[100] grid max-h-[90vh] w-full translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-2xl bg-background p-6 text-text-primary shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
+            'max-w-11/12 fixed left-[50%] top-[50%] grid max-h-[90vh] w-full translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-2xl bg-surface-dialog p-6 text-text-primary shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
             className,
           )}
           {...props}
         >
           {children}
           {showCloseButton && (
-            <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-ring-primary ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+            <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-ring-primary ring-offset-surface-dialog transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-text-primary focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-surface-hover data-[state=open]:text-text-secondary">
               <X className="h-6 w-6" aria-hidden="true" />
               <span className="sr-only">Close</span>
             </DialogPrimitive.Close>
@@ -142,12 +189,18 @@ const DialogContent = React.forwardRef<
 );
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
-const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+const DialogHeader: {
+  ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): JSX.Element;
+  displayName: string;
+} = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): JSX.Element => (
   <div className={cn('flex flex-col space-y-1.5 text-center sm:text-left', className)} {...props} />
 );
 DialogHeader.displayName = 'DialogHeader';
 
-const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+const DialogFooter: {
+  ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): JSX.Element;
+  displayName: string;
+} = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): JSX.Element => (
   <div
     className={cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2', className)}
     {...props}
@@ -155,7 +208,10 @@ const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
 );
 DialogFooter.displayName = 'DialogFooter';
 
-const DialogTitle = React.forwardRef<
+const DialogTitle: React.ForwardRefExoticComponent<
+  Omit<DialogPrimitive.DialogTitleProps & React.RefAttributes<HTMLHeadingElement>, 'ref'> &
+    React.RefAttributes<HTMLHeadingElement>
+> = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(({ className, ...props }, ref) => (
@@ -167,7 +223,10 @@ const DialogTitle = React.forwardRef<
 ));
 DialogTitle.displayName = DialogPrimitive.Title.displayName;
 
-const DialogDescription = React.forwardRef<
+const DialogDescription: React.ForwardRefExoticComponent<
+  Omit<DialogPrimitive.DialogDescriptionProps & React.RefAttributes<HTMLParagraphElement>, 'ref'> &
+    React.RefAttributes<HTMLParagraphElement>
+> = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
 >(({ className, ...props }, ref) => (

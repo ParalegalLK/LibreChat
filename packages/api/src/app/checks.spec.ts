@@ -172,6 +172,23 @@ describe('checkWebSearchConfig', () => {
       expect(logger.debug).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledTimes(1);
     });
+
+    it('should ignore plannerPrompt while validating credential keys', () => {
+      const config = {
+        plannerPrompt: 'Use official government sources when possible.',
+        serperApiKey: '${SERPER_API_KEY}',
+      };
+
+      extractVariableName.mockReturnValueOnce('SERPER_API_KEY');
+      process.env.SERPER_API_KEY = 'test-key';
+
+      checkWebSearchConfig(config);
+
+      expect(extractVariableName).toHaveBeenCalledTimes(1);
+      expect(extractVariableName).toHaveBeenCalledWith('${SERPER_API_KEY}');
+      expect(logger.debug).toHaveBeenCalledTimes(1);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
   });
 
   describe('edge cases', () => {
@@ -354,5 +371,17 @@ describe('handleRateLimits', () => {
     expect(process.env.STT_IP_WINDOW).toEqual('50');
     expect(process.env.STT_USER_MAX).toEqual('30');
     expect(process.env.STT_USER_WINDOW).toEqual('20');
+  });
+
+  it('should set authenticated agent-event admission limits', () => {
+    handleRateLimits({
+      agentEvents: {
+        userMax: 80,
+        userWindowInMinutes: 2,
+      },
+    });
+
+    expect(process.env.AGENT_EVENT_USER_MAX).toEqual('80');
+    expect(process.env.AGENT_EVENT_USER_WINDOW).toEqual('2');
   });
 });

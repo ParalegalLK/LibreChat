@@ -1,6 +1,7 @@
+import type { StartupConfigContext } from './config';
 import type { AssistantsEndpoint } from './schemas';
-import * as q from './types/queries';
 import { ResourceType } from './accessPermissions';
+import * as q from './types/queries';
 
 let BASE_URL = '';
 if (
@@ -41,6 +42,9 @@ const buildQuery = (params: Record<string, unknown>): string => {
 
 export const health = () => `${BASE_URL}/health`;
 export const user = () => `${BASE_URL}/api/user`;
+export const userPreferences = () => `${user()}/preferences`;
+
+export const openPdf = () => `${BASE_URL}/api/pdf/open`;
 
 export const balance = () => `${BASE_URL}/api/balance`;
 
@@ -70,20 +74,25 @@ export const messagesBranch = () => `${messagesRoot}/branch`;
 
 const shareRoot = `${BASE_URL}/api/share`;
 export const shareMessages = (shareId: string) => `${shareRoot}/${shareId}`;
+export const forkSharedMessages = (shareId: string) => `${shareRoot}/${shareId}/fork`;
+export const sharedStartupConfig = (shareId: string) => `${shareMessages(shareId)}/config`;
 export const getSharedLink = (conversationId: string) => `${shareRoot}/link/${conversationId}`;
 export const getSharedLinks = (
   pageSize: number,
-  isPublic: boolean,
   sortBy: 'title' | 'createdAt',
   sortDirection: 'asc' | 'desc',
   search?: string,
   cursor?: string,
-) =>
-  `${shareRoot}?pageSize=${pageSize}&isPublic=${isPublic}&sortBy=${sortBy}&sortDirection=${sortDirection}${
-    search ? `&search=${search}` : ''
-  }${cursor ? `&cursor=${cursor}` : ''}`;
+) => `${shareRoot}${buildQuery({ pageSize, sortBy, sortDirection, search, cursor })}`;
 export const createSharedLink = (conversationId: string) => `${shareRoot}/${conversationId}`;
 export const updateSharedLink = (shareId: string) => `${shareRoot}/${shareId}`;
+/** Share-scoped file routes: serve snapshotted files via shared-link permission. */
+export const sharedFile = (shareId: string, fileId: string) =>
+  `${shareRoot}/${shareId}/files/${encodeURIComponent(fileId)}`;
+export const sharedFileDownload = (shareId: string, fileId: string) =>
+  `${sharedFile(shareId, fileId)}/download`;
+export const sharedFilePreview = (shareId: string, fileId: string) =>
+  `${sharedFile(shareId, fileId)}/preview`;
 
 const keysEndpoint = `${BASE_URL}/api/keys`;
 
@@ -95,6 +104,12 @@ export const revokeUserKey = (name: string) => `${keysEndpoint}/${name}`;
 
 export const revokeAllUserKeys = () => `${keysEndpoint}?all=true`;
 
+const apiKeysEndpoint = `${BASE_URL}/api/api-keys`;
+
+export const apiKeys = () => apiKeysEndpoint;
+
+export const apiKeyById = (id: string) => `${apiKeysEndpoint}/${id}`;
+
 export const conversationsRoot = `${BASE_URL}/api/convos`;
 
 export const conversations = (params: q.ConversationListParams) => {
@@ -103,10 +118,31 @@ export const conversations = (params: q.ConversationListParams) => {
 
 export const conversationById = (id: string) => `${conversationsRoot}/${id}`;
 
+export const parentSubagents = (parentConversationId: string) =>
+  `${conversationsRoot}/${encodeURIComponent(parentConversationId)}/subagents`;
+
+export const subagentThread = (
+  parentConversationId: string,
+  threadId: string,
+  taskId?: string,
+  cursor?: string,
+) => {
+  const endpoint = `${conversationsRoot}/${encodeURIComponent(parentConversationId)}/subagents/${encodeURIComponent(threadId)}`;
+  if (taskId != null) return `${endpoint}?taskId=${encodeURIComponent(taskId)}`;
+  return cursor == null ? endpoint : `${endpoint}?cursor=${encodeURIComponent(cursor)}`;
+};
+
+export const subagentControl = (parentConversationId: string, threadId: string) =>
+  `${conversationsRoot}/${encodeURIComponent(parentConversationId)}/subagents/${encodeURIComponent(threadId)}/control`;
+
 export const genTitle = (conversationId: string) =>
   `${conversationsRoot}/gen_title/${encodeURIComponent(conversationId)}`;
 
 export const updateConversation = () => `${conversationsRoot}/update`;
+
+export const archiveConversation = () => `${conversationsRoot}/archive`;
+export const archiveAllConversations = () => `${conversationsRoot}/archive/all`;
+export const pinConversation = () => `${conversationsRoot}/pin`;
 
 export const deleteConversation = () => `${conversationsRoot}`;
 
@@ -118,6 +154,17 @@ export const forkConversation = () => `${conversationsRoot}/fork`;
 
 export const duplicateConversation = () => `${conversationsRoot}/duplicate`;
 
+export const projectsRoot = `${BASE_URL}/api/projects`;
+
+export const projects = (params: q.ProjectListParams = {}) => {
+  return `${projectsRoot}${buildQuery(params)}`;
+};
+
+export const projectById = (id: string) => `${projectsRoot}/${encodeURIComponent(id)}`;
+
+export const projectConversation = (conversationId: string) =>
+  `${projectsRoot}/conversations/${encodeURIComponent(conversationId)}`;
+
 export const search = (q: string, cursor?: string | null) =>
   `${BASE_URL}/api/search?q=${q}${cursor ? `&cursor=${cursor}` : ''}`;
 
@@ -128,6 +175,8 @@ export const presets = () => `${BASE_URL}/api/presets`;
 export const deletePreset = () => `${BASE_URL}/api/presets/delete`;
 
 export const aiEndpoints = () => `${BASE_URL}/api/endpoints`;
+
+export const tokenConfig = () => `${BASE_URL}/api/endpoints/token-config`;
 
 export const models = () => `${BASE_URL}/api/models`;
 
@@ -156,6 +205,32 @@ export const verifyEmail = () => `${BASE_URL}/api/user/verify`;
 export const loginPage = () => `${BASE_URL}/login`;
 export const registerPage = () => `${BASE_URL}/register`;
 
+const REDIRECT_PARAM = 'redirect_to';
+const LOGIN_PATH_RE = /(?:^|\/)login(?:\/|$)/;
+
+/**
+ * Builds a `/login?redirect_to=...` URL from the given or current location.
+ * Returns plain `/login` (no param) when already on a login route to prevent recursive nesting.
+ */
+export function buildLoginRedirectUrl(pathname?: string, search?: string, hash?: string): string {
+  const p = pathname ?? window.location.pathname;
+  if (LOGIN_PATH_RE.test(p)) {
+    return '/login';
+  }
+  const s = search ?? window.location.search;
+  const h = hash ?? window.location.hash;
+
+  const stripped =
+    BASE_URL && (p === BASE_URL || p.startsWith(BASE_URL + '/'))
+      ? p.slice(BASE_URL.length) || '/'
+      : p;
+  const currentPath = `${stripped}${s}${h}`;
+  if (!currentPath || currentPath === '/') {
+    return '/login';
+  }
+  return `/login?${REDIRECT_PARAM}=${encodeURIComponent(currentPath)}`;
+}
+
 export const resendVerificationEmail = () => `${BASE_URL}/api/user/verify/resend`;
 
 export const plugins = () => `${BASE_URL}/api/plugins`;
@@ -173,7 +248,16 @@ export const cancelMCPOAuth = (serverName: string) => {
   return `${BASE_URL}/api/mcp/oauth/cancel/${serverName}`;
 };
 
-export const config = () => `${BASE_URL}/api/config`;
+export const mcpOAuthStatus = (flowId: string) =>
+  `${BASE_URL}/api/mcp/oauth/status/${encodeURIComponent(flowId)}`;
+
+export const mcpOAuthBind = (serverName: string) => `${BASE_URL}/api/mcp/${serverName}/oauth/bind`;
+
+export const actionOAuthBind = (actionId: string) =>
+  `${BASE_URL}/api/actions/${actionId}/oauth/bind`;
+
+export const config = (context?: StartupConfigContext) =>
+  `${BASE_URL}/api/config${buildQuery({ context })}`;
 
 export const prompts = () => `${BASE_URL}/api/prompts`;
 
@@ -245,7 +329,14 @@ export const fileUpload = () => `${BASE_URL}/api/files`;
 export const fileDelete = () => `${BASE_URL}/api/files`;
 export const fileDownload = (userId: string, fileId: string) =>
   `${BASE_URL}/api/files/download/${userId}/${fileId}`;
+/* Deferred-preview lifecycle endpoint. Returns
+ * `{ status, text?, textFormat?, previewError? }` so the frontend can
+ * poll while background HTML extraction is in flight. See PR #12957. */
+export const filePreview = (fileId: string) =>
+  `${BASE_URL}/api/files/${encodeURIComponent(fileId)}/preview`;
 export const fileConfig = () => `${BASE_URL}/api/files/config`;
+/** Owner-scoped usage touch so queued attachments outlive the upload-window TTL. */
+export const fileUsage = () => `${BASE_URL}/api/files/usage`;
 export const agentFiles = (agentId: string) => `${BASE_URL}/api/files/agent/${agentId}`;
 
 export const images = () => `${files()}/images`;
@@ -304,6 +395,8 @@ export const postPrompt = prompts;
 
 export const updatePromptGroup = getPromptGroup;
 
+export const recordPromptGroupUsage = (groupId: string) => `${prompts()}/groups/${groupId}/use`;
+
 export const updatePromptLabels = (_id: string) => `${getPrompt(_id)}/labels`;
 
 export const updatePromptTag = (_id: string) => `${getPrompt(_id)}/tags/production`;
@@ -318,18 +411,91 @@ export const getCategories = () => `${BASE_URL}/api/categories`;
 
 export const getAllPromptGroups = () => `${prompts()}/all`;
 
+/* Scheduled chats */
+export const schedules = () => `${BASE_URL}/api/schedules`;
+export const schedule = (id: string) => `${schedules()}/${encodeURIComponent(id)}`;
+export const runSchedule = (id: string) => `${schedule(id)}/run`;
+
+/* Skills */
+export const skills = () => `${BASE_URL}/api/skills`;
+export const importSkill = () => `${skills()}/import`;
+
+export const getSkill = (id: string) => `${skills()}/${encodeURIComponent(id)}`;
+
+export const listSkillsWithFilters = (
+  filter: Record<string, string | number | undefined | null>,
+) => {
+  const cleaned = Object.entries(filter).reduce(
+    (acc, [key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        acc[key] = String(value);
+      }
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
+  const query =
+    Object.keys(cleaned).length > 0 ? `?${new URLSearchParams(cleaned).toString()}` : '';
+  return `${skills()}${query}`;
+};
+
+export const skillFiles = (id: string) => `${getSkill(id)}/files`;
+
+export const skillFile = (id: string, relativePath: string) =>
+  `${skillFiles(id)}/${encodeURIComponent(relativePath)}`;
+
+export const insights = () => `${BASE_URL}/api/admin/insights`;
+export const insightsAccess = () => `${insights()}/access`;
+
+export const adminSkillsSync = () => `${BASE_URL}/api/admin/skills/sync`;
+export const adminSkillsSyncStatus = () => `${adminSkillsSync()}/status`;
+export const adminSkillsSyncRun = () => `${adminSkillsSync()}/run`;
+export const adminSkillsSyncCredential = (credentialKey: string) =>
+  `${adminSkillsSync()}/credentials/${encodeURIComponent(credentialKey)}`;
+
+/**
+ * Skill filesystem tree (phase 2). URL shape mirrors the original UI PR so
+ * the tree hooks keep their call surface. `path` is pre-encoded by the
+ * caller (e.g. `${nodeId}/content`).
+ */
+export const skillTree = ({ skillId, path = '' }: { skillId: string; path?: string }) => {
+  let url = `${BASE_URL}/api/skills/${encodeURIComponent(skillId)}/tree`;
+  if (path) {
+    url += `/${path}`;
+  }
+  return url;
+};
+
+/* Skill active states (per-user overrides) */
+export const skillStates = () => `${BASE_URL}/api/user/settings/skills/active`;
+
+/* Langfuse connection (admin) */
+export const adminLangfuseConnection = () => `${BASE_URL}/api/admin/langfuse/connection`;
+export const adminLangfuseConnectionTest = () => `${adminLangfuseConnection()}/test`;
+export const adminLangfuseSessionLink = (conversationId: string) =>
+  `${adminLangfuseConnection()}/session/${encodeURIComponent(conversationId)}`;
+
+/* Tool favorites (starred marketplace items) */
+export const toolFavorites = () => `${BASE_URL}/api/user/settings/favorites/tools`;
+export const toolFavorite = (itemType: string, itemId: string) =>
+  `${toolFavorites()}/${itemType}/${encodeURIComponent(itemId)}`;
+
 /* Roles */
 export const roles = () => `${BASE_URL}/api/roles`;
-export const getRole = (roleName: string) => `${roles()}/${roleName.toLowerCase()}`;
+export const adminRoles = () => `${BASE_URL}/api/admin/roles`;
+export const getRole = (roleName: string) => `${roles()}/${encodeURIComponent(roleName)}`;
 export const updatePromptPermissions = (roleName: string) => `${getRole(roleName)}/prompts`;
 export const updateMemoryPermissions = (roleName: string) => `${getRole(roleName)}/memories`;
 export const updateAgentPermissions = (roleName: string) => `${getRole(roleName)}/agents`;
 export const updatePeoplePickerPermissions = (roleName: string) =>
   `${getRole(roleName)}/people-picker`;
 export const updateMCPServersPermissions = (roleName: string) => `${getRole(roleName)}/mcp-servers`;
+export const updateRemoteAgentsPermissions = (roleName: string) =>
+  `${getRole(roleName)}/remote-agents`;
 
 export const updateMarketplacePermissions = (roleName: string) =>
   `${getRole(roleName)}/marketplace`;
+export const updateSkillPermissions = (roleName: string) => `${getRole(roleName)}/skills`;
 
 /* Conversation Tags */
 export const conversationTags = (tag?: string) =>
@@ -361,7 +527,10 @@ export const verifyTwoFactorTemp = () => `${BASE_URL}/api/auth/2fa/verify-temp`;
 
 /* Memories */
 export const memories = () => `${BASE_URL}/api/memories`;
-export const memory = (key: string) => `${memories()}/${encodeURIComponent(key)}`;
+export const memory = (key: string, agentId?: string) =>
+  `${memories()}/${encodeURIComponent(key)}${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`;
+export const memoryById = (id: string, agentId?: string) =>
+  `${memories()}/id/${encodeURIComponent(id)}${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`;
 export const memoryPreferences = () => `${memories()}/preferences`;
 
 export const searchPrincipals = (params: q.PrincipalSearchParams) => {

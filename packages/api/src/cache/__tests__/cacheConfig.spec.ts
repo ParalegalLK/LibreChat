@@ -12,8 +12,10 @@ describe('cacheConfig', () => {
     delete process.env.USE_REDIS;
     delete process.env.USE_REDIS_STREAMS;
     delete process.env.USE_REDIS_CLUSTER;
+    delete process.env.REDIS_CLUSTER_SAFE_DELETE;
     delete process.env.REDIS_PING_INTERVAL;
     delete process.env.FORCED_IN_MEMORY_CACHE_NAMESPACES;
+    delete process.env.VIOLATION_SCORE_TTL;
 
     // Clear module cache
     jest.resetModules();
@@ -131,6 +133,27 @@ describe('cacheConfig', () => {
     });
   });
 
+  describe('REDIS_CLUSTER_SAFE_DELETE configuration', () => {
+    test('should default to false when REDIS_CLUSTER_SAFE_DELETE is not set', async () => {
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.REDIS_CLUSTER_SAFE_DELETE).toBe(false);
+    });
+
+    test('should be false when REDIS_CLUSTER_SAFE_DELETE is set to false', async () => {
+      process.env.REDIS_CLUSTER_SAFE_DELETE = 'false';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.REDIS_CLUSTER_SAFE_DELETE).toBe(false);
+    });
+
+    test('should be true when REDIS_CLUSTER_SAFE_DELETE is set to true', async () => {
+      process.env.REDIS_CLUSTER_SAFE_DELETE = 'true';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.REDIS_CLUSTER_SAFE_DELETE).toBe(true);
+    });
+  });
+
   describe('USE_REDIS_STREAMS configuration', () => {
     test('should default to USE_REDIS value when USE_REDIS_STREAMS is not set', async () => {
       process.env.USE_REDIS = 'true';
@@ -215,16 +238,65 @@ describe('cacheConfig', () => {
       }).rejects.toThrow('Invalid cache keys in FORCED_IN_MEMORY_CACHE_NAMESPACES: INVALID_KEY');
     });
 
-    test('should handle empty string gracefully', async () => {
+    test('should produce empty array when set to empty string (opt out of defaults)', async () => {
       process.env.FORCED_IN_MEMORY_CACHE_NAMESPACES = '';
 
       const { cacheConfig } = await import('../cacheConfig');
       expect(cacheConfig.FORCED_IN_MEMORY_CACHE_NAMESPACES).toEqual([]);
     });
 
-    test('should handle undefined env var gracefully', async () => {
+    test('should default to CONFIG_STORE and APP_CONFIG when env var is not set', async () => {
       const { cacheConfig } = await import('../cacheConfig');
-      expect(cacheConfig.FORCED_IN_MEMORY_CACHE_NAMESPACES).toEqual([]);
+      expect(cacheConfig.FORCED_IN_MEMORY_CACHE_NAMESPACES).toEqual(['CONFIG_STORE', 'APP_CONFIG']);
+    });
+
+    test('should accept TOOL_CACHE as a valid namespace', async () => {
+      process.env.FORCED_IN_MEMORY_CACHE_NAMESPACES = 'TOOL_CACHE';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.FORCED_IN_MEMORY_CACHE_NAMESPACES).toEqual(['TOOL_CACHE']);
+    });
+
+    test('should accept CONFIG_STORE and APP_CONFIG together for blue/green deployments', async () => {
+      process.env.FORCED_IN_MEMORY_CACHE_NAMESPACES = 'CONFIG_STORE,APP_CONFIG';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.FORCED_IN_MEMORY_CACHE_NAMESPACES).toEqual(['CONFIG_STORE', 'APP_CONFIG']);
+    });
+  });
+
+  describe('VIOLATION_SCORE_TTL configuration', () => {
+    test('should default to one hour when not set', async () => {
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.VIOLATION_SCORE_TTL).toBe(3600000);
+    });
+
+    test('should evaluate math expressions from the environment', async () => {
+      process.env.VIOLATION_SCORE_TTL = '1000 * 60 * 60 * 24';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.VIOLATION_SCORE_TTL).toBe(86400000);
+    });
+
+    test('should disable expiry when set to 0', async () => {
+      process.env.VIOLATION_SCORE_TTL = '0';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.VIOLATION_SCORE_TTL).toBeUndefined();
+    });
+
+    test('should disable expiry for negative values', async () => {
+      process.env.VIOLATION_SCORE_TTL = '-1000';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.VIOLATION_SCORE_TTL).toBeUndefined();
+    });
+
+    test('should fall back to the default on invalid input', async () => {
+      process.env.VIOLATION_SCORE_TTL = 'not-a-duration';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.VIOLATION_SCORE_TTL).toBe(3600000);
     });
   });
 });

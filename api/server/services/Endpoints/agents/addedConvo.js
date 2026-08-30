@@ -1,12 +1,22 @@
 const { logger } = require('@librechat/data-schemas');
-const { initializeAgent, validateAgentModel } = require('@librechat/api');
-const { loadAddedAgent, setGetAgent, ADDED_AGENT_ID } = require('~/models/loadAddedAgent');
-const { getConvoFiles } = require('~/models/Conversation');
-const { getAgent } = require('~/models/Agent');
+const {
+  ADDED_AGENT_ID,
+  initializeAgent,
+  validateAgentModel,
+  resolveAgentScopedSkillIds,
+  resolveModelSpecSkillIds,
+  loadAddedAgent: loadAddedAgentFn,
+} = require('@librechat/api');
+const { isEphemeralAgentId } = require('librechat-data-provider');
+const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
+const { getMCPServerTools } = require('~/server/services/Config');
+const { getAccessibleMcpServerNames } = require('~/server/services/MCP');
+const { isFatalAgentInitializationError } = require('~/server/services/ToolService');
+const { getSkillDbMethods, canAuthorSkillFiles } = require('./skillDeps');
 const db = require('~/models');
 
-// Initialize the getAgent dependency
-setGetAgent(getAgent);
+const loadAddedAgent = (params) =>
+  loadAddedAgentFn(params, { getAgent: db.getAgent, getMCPServerTools });
 
 /**
  * Process addedConvo for parallel agent execution.
@@ -31,10 +41,24 @@ setGetAgent(getAgent);
  * @param {Function} params.loadTools - Function to load agent tools
  * @param {Array} params.requestFiles - Request files
  * @param {string} params.conversationId - The conversation ID
+ * @param {string} [params.parentMessageId] - The parent message ID for thread filtering
+ * @param {import('@librechat/api').MCPRuntimeRequestBody} [params.requestBody]
  * @param {Set} params.allowedProviders - Set of allowed providers
  * @param {Map} params.agentConfigs - Map of agent configs to add to
  * @param {string} params.primaryAgentId - The primary agent ID
  * @param {Object|undefined} params.userMCPAuthMap - User MCP auth map to merge into
+ * @param {Array} [params.accessibleSkillIds] - Full VIEW-accessible skill IDs for the user
+ * @param {Array} [params.editableSkillIds] - Full EDIT-accessible skill IDs for the user
+ * @param {boolean} [params.skillsCapabilityEnabled] - Whether endpoint Skills are enabled
+ * @param {boolean} [params.ephemeralSkillsToggle] - Per-request ephemeral Skills badge state
+ * @param {boolean} [params.skillCreateAllowed] - Whether the user can create Skills
+ * @param {Record<string, boolean>} [params.skillStates] - Per-user Skill active overrides
+ * @param {boolean} [params.defaultActiveOnShare] - Default active state for shared Skills
+ * @param {boolean} [params.codeEnvAvailable] - `execute_code` capability flag;
+ *   forwarded verbatim to the added agent's `initializeAgent`. @see
+ *   InitializeAgentParams.codeEnvAvailable for full semantics.
+ * @param {boolean} [params.statefulSessionsAvailable] - `stateful_code_sessions`
+ *   capability flag; forwarded verbatim alongside `codeEnvAvailable`.
  * @returns {Promise<{userMCPAuthMap: Object|undefined}>} The updated userMCPAuthMap
  */
 const processAddedConvo = async ({
@@ -46,24 +70,39 @@ const processAddedConvo = async ({
   loadTools,
   requestFiles,
   conversationId,
+  parentMessageId,
+  requestBody,
   allowedProviders,
   agentConfigs,
   primaryAgentId,
   primaryAgent,
   userMCPAuthMap,
+  accessibleSkillIds = [],
+  editableSkillIds = [],
+  skillsCapabilityEnabled = false,
+  ephemeralSkillsToggle = false,
+  skillCreateAllowed = false,
+  skillStates,
+  defaultActiveOnShare,
+  codeEnvAvailable,
+  backgroundToolsAvailable,
+  toolIntentsAvailable,
+  statefulSessionsAvailable,
+  memoryAvailable,
 }) => {
   const addedConvo = endpointOption.addedConvo;
-  logger.debug('[processAddedConvo] Called with addedConvo:', {
-    hasAddedConvo: addedConvo != null,
-    addedConvoEndpoint: addedConvo?.endpoint,
-    addedConvoModel: addedConvo?.model,
-    addedConvoAgentId: addedConvo?.agent_id,
-  });
   if (addedConvo == null) {
     return { userMCPAuthMap };
   }
 
+  logger.debug('[processAddedConvo] Processing added conversation', {
+    model: addedConvo.model,
+    agentId: addedConvo.agent_id,
+    endpoint: addedConvo.endpoint,
+  });
+
   try {
+    const skillDbMethods = getSkillDbMethods();
     const addedAgent = await loadAddedAgent({ req, conversation: addedConvo, primaryAgent });
     if (!addedAgent) {
       return { userMCPAuthMap };
@@ -84,6 +123,47 @@ const processAddedConvo = async ({
       return { userMCPAuthMap };
     }
 
+    const selectedModelSpec =
+      addedConvo.spec && Array.isArray(req.config?.modelSpecs?.list)
+        ? req.config.modelSpecs.list.find((modelSpec) => modelSpec.name === addedConvo.spec)
+        : null;
+
+    if (
+      addedAgent &&
+      isEphemeralAgentId(addedAgent.id) &&
+      selectedModelSpec &&
+      Object.hasOwn(selectedModelSpec, 'skills')
+    ) {
+      if (selectedModelSpec.skills === true) {
+        addedAgent.skills_enabled = true;
+        delete addedAgent.skills;
+      } else if (selectedModelSpec.skills === false) {
+        addedAgent.skills_enabled = false;
+        addedAgent.skills = [];
+      } else if (Array.isArray(selectedModelSpec.skills)) {
+        const resolvedSkillIds = await resolveModelSpecSkillIds({
+          names: selectedModelSpec.skills,
+          accessibleSkillIds,
+          getSkillByName: skillDbMethods.getSkillByName,
+        });
+        addedAgent.skills_enabled = true;
+        addedAgent.skills = resolvedSkillIds.map((id) => id.toString());
+      }
+    }
+
+    const scopedSkillIds = resolveAgentScopedSkillIds({
+      agent: addedAgent,
+      accessibleSkillIds,
+      skillsCapabilityEnabled,
+      ephemeralSkillsToggle,
+    });
+    const scopedEditableSkillIds = resolveAgentScopedSkillIds({
+      agent: addedAgent,
+      accessibleSkillIds: editableSkillIds,
+      skillsCapabilityEnabled,
+      ephemeralSkillsToggle,
+    });
+
     const addedConfig = await initializeAgent(
       {
         req,
@@ -91,17 +171,42 @@ const processAddedConvo = async ({
         loadTools,
         requestFiles,
         conversationId,
+        parentMessageId,
+        requestBody,
         agent: addedAgent,
         endpointOption,
         allowedProviders,
+        accessibleSkillIds: scopedSkillIds,
+        skillAuthoringAvailable: canAuthorSkillFiles({
+          agent: addedAgent,
+          scopedEditableSkillIds,
+          skillCreateAllowed,
+          skillsCapabilityEnabled,
+          ephemeralSkillsToggle,
+        }),
+        codeEnvAvailable,
+        backgroundToolsAvailable,
+        toolIntentsAvailable,
+        statefulSessionsAvailable,
+        memoryAvailable,
+        skillStates,
+        defaultActiveOnShare,
       },
       {
-        getConvoFiles,
         getFiles: db.getFiles,
         getUserKey: db.getUserKey,
+        getMessages: db.getMessages,
+        getConvoFiles: db.getConvoFiles,
+        getAccessibleMcpServerNames,
         updateFilesUsage: db.updateFilesUsage,
+        getUserCodeFiles: db.getUserCodeFiles,
         getUserKeyValues: db.getUserKeyValues,
         getToolFilesByIds: db.getToolFilesByIds,
+        getCodeGeneratedFiles: db.getCodeGeneratedFiles,
+        filterFilesByAgentAccess,
+        listSkillsByAccess: skillDbMethods.listSkillsByAccess,
+        listAlwaysApplySkills: skillDbMethods.listAlwaysApplySkills,
+        getSkillByName: skillDbMethods.getSkillByName,
       },
     );
 
@@ -125,6 +230,9 @@ const processAddedConvo = async ({
 
     return { userMCPAuthMap };
   } catch (err) {
+    if (isFatalAgentInitializationError(err)) {
+      throw err;
+    }
     logger.error('[processAddedConvo] Error processing addedConvo for parallel agent', err);
     return { userMCPAuthMap };
   }

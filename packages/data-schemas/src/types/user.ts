@@ -1,7 +1,21 @@
+import type {
+  TUserFavorite,
+  RefillIntervalUnit,
+  StatefulCodeEnvironment,
+} from 'librechat-data-provider';
 import type { Document, Types } from 'mongoose';
 import { CursorPaginationParams } from '~/common';
 
 export interface IUser extends Document {
+  _id: Types.ObjectId;
+  /**
+   * Mongoose's `Document.id` virtual is typed `id?: any`. At runtime it's
+   * always `_id.toString()` for a hydrated doc, so narrow to a required
+   * string. This also lets `IUser` satisfy Express.User augmentations
+   * (the OIDC remote-agent middleware assigns `req.user = IUser` where
+   * the project's local `Express.User` requires `id: string`).
+   */
+  id: string;
   name?: string;
   username?: string;
   email: string;
@@ -19,9 +33,16 @@ export interface IUser extends Document {
   discordId?: string;
   appleId?: string;
   plugins?: string[];
+  openidIssuer?: string;
   twoFactorEnabled?: boolean;
   totpSecret?: string;
   backupCodes?: Array<{
+    codeHash: string;
+    used: boolean;
+    usedAt?: Date | null;
+  }>;
+  pendingTotpSecret?: string;
+  pendingBackupCodes?: Array<{
     codeHash: string;
     used: boolean;
     usedAt?: Date | null;
@@ -31,18 +52,35 @@ export interface IUser extends Document {
   }>;
   expiresAt?: Date;
   termsAccepted?: boolean;
+  termsAcceptedAt?: Date | null;
+  /** Internal fence that prevents agent-trigger admission during account deletion. */
+  agentTriggerDeletionStartedAt?: Date;
+  /** Expiring fences closing subagent admission while bulk deletions drain. */
+  subagentAdmissionFences?: Array<{
+    token: string;
+    expiresAt: Date;
+  }>;
   personalization?: {
     memories?: boolean;
+    statefulCodeEnvironment?: StatefulCodeEnvironment;
   };
-  favorites?: Array<{
-    agentId?: string;
-    model?: string;
-    endpoint?: string;
-  }>;
+  favorites?: TUserFavorite[];
+  /** Per-skill active/inactive overrides. Key = skillId, value = active state. */
+  skillStates?: Record<string, boolean>;
   createdAt?: Date;
   updatedAt?: Date;
   /** Field for external source identification (for consistency with TPrincipal schema) */
   idOnTheSource?: string;
+  tenantId?: string;
+  federatedTokens?: OIDCTokens;
+  openidTokens?: OIDCTokens;
+}
+
+export interface OIDCTokens {
+  access_token?: string;
+  id_token?: string;
+  refresh_token?: string;
+  expires_at?: number;
 }
 
 export interface BalanceConfig {
@@ -50,7 +88,7 @@ export interface BalanceConfig {
   startBalance?: number;
   autoRefillEnabled?: boolean;
   refillIntervalValue?: number;
-  refillIntervalUnit?: string;
+  refillIntervalUnit?: RefillIntervalUnit;
   refillAmount?: number;
 }
 
@@ -68,9 +106,12 @@ export interface UpdateUserRequest {
   plugins?: string[];
   twoFactorEnabled?: boolean;
   termsAccepted?: boolean;
+  termsAcceptedAt?: Date | null;
   personalization?: {
     memories?: boolean;
+    statefulCodeEnvironment?: StatefulCodeEnvironment;
   };
+  skillStates?: Record<string, boolean>;
 }
 
 export interface UserDeleteResult {
