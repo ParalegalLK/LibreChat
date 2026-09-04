@@ -15,6 +15,7 @@ const Progress: React.ForwardRefExoticComponent<
       'relative h-2 w-full overflow-hidden rounded-full bg-surface-tertiary',
       className,
     )}
+    value={value}
     {...props}
   >
     <ProgressPrimitive.Indicator
