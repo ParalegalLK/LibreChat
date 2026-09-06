@@ -16,6 +16,7 @@ import {
 } from '~/hooks';
 import { ChatContext, AddedChatContext, ChatFormProvider, useFileMapContext } from '~/Providers';
 import ConversationStarters from './Input/ConversationStarters';
+import AIAnalysisProgressBar from './AIAnalysisProgressBar';
 import { useGetMessagesByConvoId } from '~/data-provider';
 import MessagesView from './Messages/MessagesView';
 import Presentation from './Presentation';
@@ -156,6 +157,7 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                       isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
                     )}
                   >
+                    {!isLandingPage && <AIAnalysisProgressBar />}
                     {isLandingPage && <ConversationStarters />}
                     {isSubagentThreadReadOnly ? (
                       <div

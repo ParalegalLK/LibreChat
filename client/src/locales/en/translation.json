@@ -858,6 +858,8 @@
   "com_ui_all_turns": "All turns",
   "com_ui_always_interrupt": "Always interrupt instead",
   "com_ui_analyzing": "Analyzing",
+  "com_ui_analyzing_attachment": "Analyzing attachment...",
+  "com_ui_analyzing_attachment_progress": "Analyzing attachment, {{percent}}% complete",
   "com_ui_analyzing_finished": "Finished analyzing",
   "com_ui_api_key": "API Key",
   "com_ui_api_key_create_error": "Failed to create API key",
