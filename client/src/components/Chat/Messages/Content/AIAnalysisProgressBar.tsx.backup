@@ -1,0 +1,46 @@
+import React, { useState, useEffect } from 'react';
+
+export default function AIAnalysisProgressBar({ isGenerating, hasText }) {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    // If text has started streaming, force 100% and prepare to hide
+    if (hasText) {
+      setProgress(100);
+      return;
+    }
+
+    if (isGenerating && !hasText) {
+      // Simulate progress creeping up to 95%
+      const interval = setInterval(() => {
+        setProgress((oldProgress) => {
+          if (oldProgress >= 95) return 95;
+          const increment = (100 - oldProgress) * 0.15; 
+          return oldProgress + increment;
+        });
+      }, 500);
+
+      return () => clearInterval(interval);
+    } else {
+        setProgress(0);
+    }
+  }, [isGenerating, hasText]);
+
+  // Hide the bar entirely if it's not generating or if text has started arriving
+  if (!isGenerating || hasText) return null;
+
+  return (
+    <div className="w-full max-w-md mt-2 mb-4 space-y-1">
+      <div className="flex justify-between text-xs text-neutral-500 font-medium dark:text-neutral-400">
+        <span>Analyzing context...</span>
+        <span>{Math.round(progress)}%</span>
+      </div>
+      <div className="h-2 w-full bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden">
+        <div 
+          className="h-full bg-blue-600 transition-all duration-500 ease-out"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+    </div>
+  );
+}
