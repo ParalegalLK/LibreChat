@@ -1566,10 +1566,29 @@ export async function createRun({
       : shapedSummarization;
 
     const modelParameters = normalizeAgentModelParameters(agent.model_parameters);
-    const hasExplicitStreamUsage = Object.prototype.hasOwnProperty.call(
+    const hasModelStreamUsage = Object.prototype.hasOwnProperty.call(
       modelParameters ?? {},
       'streamUsage',
     );
+    const isOpenAICompatibleCustomProvider =
+      customProviders.has(agent.provider) ||
+      (agent.provider === Providers.OPENAI && agent.endpoint !== agent.provider);
+    let endpointStreamUsage: boolean | undefined;
+    if (isOpenAICompatibleCustomProvider && !hasModelStreamUsage && appConfig) {
+      try {
+        const { customEndpointConfig } = getProviderConfig({
+          provider: agent.endpoint ?? agent.provider,
+          appConfig,
+        });
+        const configuredValue = customEndpointConfig?.addParams?.streamUsage;
+        if (typeof configuredValue === 'boolean') {
+          endpointStreamUsage = configuredValue;
+        }
+      } catch (error) {
+        logger.warn('[createRun] Failed to resolve custom endpoint streamUsage', error);
+      }
+    }
+    const hasExplicitStreamUsage = hasModelStreamUsage || endpointStreamUsage !== undefined;
     const llmConfig = withModelCallbacks(
       Object.assign(
         {
@@ -1611,10 +1630,10 @@ export async function createRun({
     });
 
     /** Resolves issues with new OpenAI usage field */
-    if (
-      customProviders.has(agent.provider) ||
-      (agent.provider === Providers.OPENAI && agent.endpoint !== agent.provider)
-    ) {
+    if (isOpenAICompatibleCustomProvider) {
+      if (!hasModelStreamUsage && endpointStreamUsage !== undefined) {
+        llmConfig.streamUsage = endpointStreamUsage;
+      }
       if (!hasExplicitStreamUsage) {
         llmConfig.streamUsage = false;
       }

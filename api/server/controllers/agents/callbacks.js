@@ -98,14 +98,22 @@ class ModelEndHandler {
    *   a no-op for them even when the map is provided.
    * @param {(data: Record<string, unknown>) => Promise<void> | void} [emitUsage] Optional
    *   callback to stream per-call token usage to the client.
+   * @param {Map<string, UsageMetadata> | null} [streamUsageByRunId] Usage captured from
+   *   terminal stream chunks when LangChain omits it from the model-end output.
    */
-  constructor(collectedUsage, collectedThoughtSignatures = null, emitUsage = null) {
+  constructor(
+    collectedUsage,
+    collectedThoughtSignatures = null,
+    emitUsage = null,
+    streamUsageByRunId = null,
+  ) {
     if (!Array.isArray(collectedUsage)) {
       throw new Error('collectedUsage must be an array');
     }
     this.collectedUsage = collectedUsage;
     this.collectedThoughtSignatures = collectedThoughtSignatures;
     this.emitUsage = emitUsage;
+    this.streamUsageByRunId = streamUsageByRunId;
   }
 
   finalize(errorMessage) {
@@ -146,7 +154,12 @@ class ModelEndHandler {
         });
       }
 
-      const usage = data?.output?.usage_metadata;
+      const runId = metadata?.run_id;
+      const streamedUsage = runId ? this.streamUsageByRunId?.get(runId) : undefined;
+      if (runId) {
+        this.streamUsageByRunId?.delete(runId);
+      }
+      const usage = data?.output?.usage_metadata ?? streamedUsage;
       if (!usage) {
         return this.finalize(errorMessage);
       }
@@ -230,6 +243,25 @@ class ModelEndHandler {
     } catch (error) {
       logger.error('Error handling model end event:', error);
       return this.finalize(errorMessage);
+    }
+  }
+}
+class ModelStreamUsageHandler {
+  /** @param {Map<string, UsageMetadata>} streamUsageByRunId */
+  constructor(streamUsageByRunId) {
+    this.streamUsageByRunId = streamUsageByRunId;
+  }
+
+  /**
+   * @param {string} _event
+   * @param {StreamEventData | undefined} data
+   * @param {Record<string, unknown> | undefined} metadata
+   */
+  handle(_event, data, metadata) {
+    const runId = metadata?.run_id;
+    const usage = data?.chunk?.usage_metadata;
+    if (typeof runId === 'string' && runId && usage) {
+      this.streamUsageByRunId.set(runId, usage);
     }
   }
 }
@@ -481,11 +513,14 @@ function getDefaultHandlers({
     }
     return emitForJob({ event: UsageEvents.ON_TOKEN_USAGE, data: payload });
   };
+  const streamUsageByRunId = new Map();
   const handlers = {
+    [GraphEvents.CHAT_MODEL_STREAM]: new ModelStreamUsageHandler(streamUsageByRunId),
     [GraphEvents.CHAT_MODEL_END]: new ModelEndHandler(
       collectedUsage,
       collectedThoughtSignatures,
       emitTokenUsage,
+      streamUsageByRunId,
     ),
     [GraphEvents.TOOL_END]: new ToolEndHandler(toolEndCallback, logger),
     [GraphEvents.ON_RUN_STEP]: {
@@ -1548,6 +1583,7 @@ function buildSummarizationHandlers({ isStreaming, res }) {
 
 module.exports = {
   ModelEndHandler,
+  ModelStreamUsageHandler,
   agentLogHandler,
   agentLogHandlerObj,
   getDefaultHandlers,

@@ -18,7 +18,11 @@ jest.mock('~/server/services/Files/process', () => ({
   saveBase64Image: jest.fn(),
 }));
 
-const { ModelEndHandler, contextualizeModelUsage } = require('../callbacks');
+const {
+  ModelEndHandler,
+  ModelStreamUsageHandler,
+  contextualizeModelUsage,
+} = require('../callbacks');
 
 const buildGraph = () => ({
   getAgentContext: () => ({
@@ -229,6 +233,50 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
 
     expect(collectedUsage[0].agentId).toBeUndefined();
     expect(emitUsage).toHaveBeenCalledWith(expect.objectContaining({ agentId: undefined }));
+  });
+
+  it('falls back to usage from the terminal stream chunk when model end omits it', async () => {
+    const collectedUsage = [];
+    const emitUsage = jest.fn();
+    const streamUsageByRunId = new Map();
+    const streamHandler = new ModelStreamUsageHandler(streamUsageByRunId);
+    const endHandler = new ModelEndHandler(collectedUsage, null, emitUsage, streamUsageByRunId);
+    const usage = { input_tokens: 890794, output_tokens: 11269, total_tokens: 902063 };
+    const metadata = { run_id: 'silva-run', ls_model_name: 'silva' };
+
+    streamHandler.handle('on_chat_model_stream', { chunk: { usage_metadata: usage } }, metadata);
+    await endHandler.handle('on_chat_model_end', { output: {} }, metadata, buildGraph());
+
+    expect(collectedUsage).toHaveLength(1);
+    expect(collectedUsage[0]).toMatchObject(usage);
+    expect(emitUsage).toHaveBeenCalledTimes(1);
+    expect(streamUsageByRunId.size).toBe(0);
+  });
+
+  it('prefers model-end usage and clears any streamed fallback for the run', async () => {
+    const collectedUsage = [];
+    const streamUsageByRunId = new Map();
+    const streamHandler = new ModelStreamUsageHandler(streamUsageByRunId);
+    const endHandler = new ModelEndHandler(collectedUsage, null, null, streamUsageByRunId);
+    const metadata = { run_id: 'normal-run', ls_model_name: 'gpt-4' };
+    const streamedUsage = { input_tokens: 10, output_tokens: 2, total_tokens: 12 };
+    const endUsage = { input_tokens: 11, output_tokens: 3, total_tokens: 14 };
+
+    streamHandler.handle(
+      'on_chat_model_stream',
+      { chunk: { usage_metadata: streamedUsage } },
+      metadata,
+    );
+    await endHandler.handle(
+      'on_chat_model_end',
+      { output: { usage_metadata: endUsage } },
+      metadata,
+      buildGraph(),
+    );
+
+    expect(collectedUsage).toHaveLength(1);
+    expect(collectedUsage[0]).toMatchObject(endUsage);
+    expect(streamUsageByRunId.size).toBe(0);
   });
 
   it('throws when collectedUsage is not an array (existing contract)', () => {

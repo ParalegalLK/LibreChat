@@ -295,6 +295,24 @@ describe('custom endpoint stream usage defaults', () => {
     expect(clientOptions.streamUsage).toBe(true);
     expect(clientOptions.usage).toBe(true);
   });
+
+  it('respects streamUsage from custom endpoint addParams', async () => {
+    const agents = await callAndCapture({
+      agents: [makeAgent({ endpoint: 'LiteLLM' })],
+      appConfig: makeAppConfig([
+        {
+          name: 'LiteLLM',
+          apiKey: 'test-key',
+          baseURL: 'https://litellm.example.com/v1',
+          addParams: { streamUsage: true },
+        },
+      ]),
+    });
+    const clientOptions = agents[0].clientOptions as Record<string, unknown>;
+
+    expect(clientOptions.streamUsage).toBe(true);
+    expect(clientOptions.usage).toBe(true);
+  });
 });
 
 describe('model-level callbacks', () => {
