@@ -1,42 +1,38 @@
-import React, { useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
+import React, { useEffect, memo } from 'react';
 import TagManager from 'react-gtm-module';
+import ReactMarkdown from 'react-markdown';
 import { Constants } from 'librechat-data-provider';
+import type { TStartupConfig } from 'librechat-data-provider';
 import { useGetStartupConfig } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 
-export default function Footer({ className }: { className?: string }) {
-  const { data: config } = useGetStartupConfig();
+type FooterProps = {
+  className?: string;
+  startupConfig?: FooterStartupConfig | null;
+};
+
+type FooterStartupConfig = Pick<Partial<TStartupConfig>, 'analyticsGtmId' | 'customFooter'> & {
+  interface?: Pick<NonNullable<TStartupConfig['interface']>, 'privacyPolicy' | 'termsOfService'>;
+};
+
+function Footer({ className, startupConfig }: FooterProps) {
+  const shouldFetchConfig = startupConfig === undefined;
+  const { data: fetchedConfig } = useGetStartupConfig({ enabled: shouldFetchConfig });
+  const config = shouldFetchConfig ? fetchedConfig : startupConfig;
   const localize = useLocalize();
 
   const privacyPolicy = config?.interface?.privacyPolicy;
   const termsOfService = config?.interface?.termsOfService;
 
   const privacyPolicyRender = privacyPolicy?.externalUrl != null && (
-    <a
-      className="text-text-secondary underline"
-      href={privacyPolicy.externalUrl}
-      target={privacyPolicy.openNewTab === true ? '_blank' : undefined}
-      rel="noreferrer"
-    >
+    <a className="text-text-secondary underline" href={privacyPolicy.externalUrl} rel="noreferrer">
       {localize('com_ui_privacy_policy')}
-      {privacyPolicy.openNewTab === true && (
-        <span className="sr-only">{' ' + localize('com_ui_opens_new_tab')}</span>
-      )}
     </a>
   );
 
   const termsOfServiceRender = termsOfService?.externalUrl != null && (
-    <a
-      className="text-text-secondary underline"
-      href={termsOfService.externalUrl}
-      target={termsOfService.openNewTab === true ? '_blank' : undefined}
-      rel="noreferrer"
-    >
+    <a className="text-text-secondary underline" href={termsOfService.externalUrl} rel="noreferrer">
       {localize('com_ui_terms_of_service')}
-      {termsOfService.openNewTab === true && (
-        <span className="sr-only">{' ' + localize('com_ui_opens_new_tab')}</span>
-      )}
     </a>
   );
 
@@ -68,11 +64,10 @@ export default function Footer({ className }: { className?: string }) {
                 className="text-text-secondary underline"
                 href={href}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 {...otherProps}
               >
                 {children}
-                <span className="sr-only">{' ' + localize('com_ui_opens_new_tab')}</span>
               </a>
             );
           },
@@ -96,7 +91,6 @@ export default function Footer({ className }: { className?: string }) {
           className ??
           'absolute bottom-0 left-0 right-0 hidden items-center justify-center gap-2 px-2 py-2 text-center text-xs text-text-primary sm:flex md:px-[60px]'
         }
-        role="contentinfo"
       >
         {footerElements.map((contentRender, index) => {
           const isLastElement = index === footerElements.length - 1;
@@ -116,3 +110,8 @@ export default function Footer({ className }: { className?: string }) {
     </div>
   );
 }
+
+const MemoizedFooter = memo(Footer);
+MemoizedFooter.displayName = 'Footer';
+
+export default MemoizedFooter;

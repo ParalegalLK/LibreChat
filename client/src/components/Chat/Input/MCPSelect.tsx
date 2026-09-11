@@ -1,118 +1,162 @@
-import React, { memo, useCallback } from 'react';
+import React, { memo, useRef, useMemo, useEffect } from 'react';
+import * as Ariakit from '@ariakit/react';
+import { ChevronDown } from 'lucide-react';
 import { PermissionTypes, Permissions } from 'librechat-data-provider';
-import { MultiSelect, MCPIcon } from '@librechat/client';
-import MCPServerStatusIcon from '~/components/MCP/MCPServerStatusIcon';
+import { TooltipAnchor, composerControlClasses } from '@librechat/client';
+import MCPServerMenuItem from '~/components/MCP/MCPServerMenuItem';
 import MCPConfigDialog from '~/components/MCP/MCPConfigDialog';
+import StackedMCPIcons from '~/components/MCP/StackedMCPIcons';
+import { useMCPRefresh } from '~/hooks/MCP/useMCPRefresh';
+import { useHasAccess, useLocalize } from '~/hooks';
 import { useBadgeRowContext } from '~/Providers';
-import { useHasAccess } from '~/hooks';
 import { cn } from '~/utils';
 
 function MCPSelectContent() {
-  const { conversationId, mcpServerManager } = useBadgeRowContext();
+  const localize = useLocalize();
+  const context = useBadgeRowContext();
+  const { conversationId, storageContextKey, mcpServerManager: manager } = context ?? {};
+
+  const menuStore = Ariakit.useMenuStore({ focusLoop: true });
+  const isOpen = menuStore.useState('open');
+  const configDialogOpen = manager?.getConfigDialogProps()?.isOpen === true;
+  useMCPRefresh({
+    enabled: (isOpen || configDialogOpen) && (manager?.availableMCPServers.length ?? 0) > 0,
+  });
+
+  /**
+   * The menu closes with the dialog it launched. Ariakit only takes Escape for
+   * a menu when the event target is the menu, its trigger, or `body`, so while
+   * the config dialog holds focus the menu never sees it — the Escape that
+   * closes the dialog leaves the menu open behind it, and `disabled={isOpen}`
+   * then makes its trigger unclickable, stranding the reader
+   * (`mcp-oauth-readiness` e2e). Keyed on the dialog CLOSING, not opening: the
+   * menu stays mounted underneath while the dialog is up, which is where its
+   * server rows are read from.
+   */
+  const configDialogWasOpen = useRef(false);
+  useEffect(() => {
+    if (configDialogWasOpen.current && !configDialogOpen) {
+      menuStore.hide();
+    }
+    configDialogWasOpen.current = configDialogOpen;
+  }, [configDialogOpen, menuStore]);
+
+  const selectedServers = useMemo(() => {
+    if (!manager?.mcpValues || manager.mcpValues.length === 0) {
+      return [];
+    }
+    const selectedSet = new Set(manager.mcpValues);
+    return manager.selectableServers?.filter((s) => selectedSet.has(s.serverName)) ?? [];
+  }, [manager?.selectableServers, manager?.mcpValues]);
+
+  /** Counts what the menu actually offers, never the raw selection: a name the
+   *  catalog has not returned — or one the admin has hidden — renders no row,
+   *  and billing it to the badge reads as a server that cannot be turned off. */
+  const displayText = useMemo(() => {
+    const selectedCount = selectedServers.length;
+    if (selectedCount === 0) {
+      return null;
+    }
+    if (selectedCount === 1) {
+      const server = selectedServers[0];
+      return server.config?.title || server.serverName;
+    }
+    return localize('com_ui_x_selected', { 0: selectedCount });
+  }, [selectedServers, localize]);
+
+  if (!manager) {
+    return null;
+  }
+
   const {
-    localize,
     isPinned,
     mcpValues,
     isInitializing,
     placeholderText,
-    batchToggleServers,
-    getConfigDialogProps,
-    getServerStatusIconProps,
+    connectionStatus,
     selectableServers,
-  } = mcpServerManager;
-
-  const renderSelectedValues = useCallback(
-    (
-      values: string[],
-      placeholder?: string,
-      items?: (string | { label: string; value: string })[],
-    ) => {
-      if (values.length === 0) {
-        return placeholder || localize('com_ui_select_placeholder');
-      }
-      if (values.length === 1) {
-        const selectedItem = items?.find((i) => typeof i !== 'string' && i.value == values[0]);
-        return selectedItem && typeof selectedItem !== 'string' ? selectedItem.label : values[0];
-      }
-      return localize('com_ui_x_selected', { 0: values.length });
-    },
-    [localize],
-  );
-
-  const renderItemContent = useCallback(
-    (serverName: string, defaultContent: React.ReactNode) => {
-      const statusIconProps = getServerStatusIconProps(serverName);
-      const isServerInitializing = isInitializing(serverName);
-
-      /**
-       Common wrapper for the main content (check mark + text).
-       Ensures Check & Text are adjacent and the group takes available space.
-        */
-      const mainContentWrapper = (
-        <button
-          type="button"
-          className={`flex flex-grow items-center rounded bg-transparent p-0 text-left transition-colors focus:outline-none ${
-            isServerInitializing ? 'opacity-50' : ''
-          }`}
-          tabIndex={0}
-          disabled={isServerInitializing}
-        >
-          {defaultContent}
-        </button>
-      );
-
-      const statusIcon = statusIconProps && <MCPServerStatusIcon {...statusIconProps} />;
-
-      if (statusIcon) {
-        return (
-          <div className="flex w-full items-center justify-between">
-            {mainContentWrapper}
-            <div className="ml-2 flex items-center">{statusIcon}</div>
-          </div>
-        );
-      }
-
-      return mainContentWrapper;
-    },
-    [getServerStatusIconProps, isInitializing],
-  );
+    getConfigDialogProps,
+    toggleServerSelection,
+    getServerStatusIconProps,
+  } = manager;
 
   if (!isPinned && mcpValues?.length === 0) {
     return null;
   }
 
   const configDialogProps = getConfigDialogProps();
+
   return (
     <>
-      <MultiSelect
-        items={selectableServers.map((s) => ({
-          label: s.config.title || s.serverName,
-          value: s.serverName,
-        }))}
-        selectedValues={mcpValues ?? []}
-        setSelectedValues={batchToggleServers}
-        renderSelectedValues={renderSelectedValues}
-        renderItemContent={renderItemContent}
-        placeholder={placeholderText}
-        popoverClassName="min-w-fit"
-        className="badge-icon min-w-fit"
-        selectIcon={<MCPIcon className="icon-md text-text-primary" />}
-        selectItemsClassName="border border-blue-600/50 bg-blue-500/10 hover:bg-blue-700/10"
-        selectClassName={cn(
-          'group relative inline-flex items-center justify-center md:justify-start gap-1.5 rounded-full border border-border-medium text-sm font-medium transition-all',
-          'md:w-full size-9 p-2 md:p-3 bg-transparent shadow-sm hover:bg-surface-hover hover:shadow-md active:shadow-inner',
-        )}
-      />
+      <Ariakit.MenuProvider store={menuStore}>
+        <TooltipAnchor
+          description={placeholderText}
+          disabled={isOpen}
+          render={
+            <Ariakit.MenuButton
+              className={cn(
+                composerControlClasses(),
+                'min-w-theme-control px-2.5 md:w-fit md:justify-start md:px-theme-normal',
+                isOpen && 'bg-surface-hover',
+              )}
+            />
+          }
+        >
+          <StackedMCPIcons selectedServers={selectedServers} maxIcons={3} iconSize="sm" />
+          <span className="hidden truncate text-text-primary md:block">
+            {displayText || placeholderText}
+          </span>
+          <ChevronDown
+            className={cn(
+              'hidden h-3 w-3 text-text-secondary transition-transform md:block',
+              isOpen && 'rotate-180',
+            )}
+          />
+        </TooltipAnchor>
+
+        <Ariakit.Menu
+          portal={true}
+          gutter={8}
+          modal={true}
+          unmountOnHide={true}
+          aria-label={localize('com_ui_mcp_servers')}
+          className={cn(
+            'z-50 flex min-w-[260px] max-w-[320px] flex-col rounded-xl',
+            'border border-border-light bg-presentation p-1.5 shadow-lg',
+            'origin-top opacity-0 transition-[opacity,transform] duration-200 ease-out',
+            'data-[enter]:scale-100 data-[enter]:opacity-100',
+            'scale-95 data-[leave]:scale-95 data-[leave]:opacity-0',
+          )}
+        >
+          <div className="flex max-h-[320px] flex-col gap-1 overflow-y-auto">
+            {selectableServers.map((server) => (
+              <MCPServerMenuItem
+                key={server.serverName}
+                server={server}
+                isSelected={mcpValues?.includes(server.serverName) ?? false}
+                connectionStatus={connectionStatus}
+                isInitializing={isInitializing}
+                statusIconProps={getServerStatusIconProps(server.serverName)}
+                onToggle={toggleServerSelection}
+              />
+            ))}
+          </div>
+        </Ariakit.Menu>
+      </Ariakit.MenuProvider>
       {configDialogProps && (
-        <MCPConfigDialog {...configDialogProps} conversationId={conversationId} />
+        <MCPConfigDialog
+          {...configDialogProps}
+          conversationId={conversationId}
+          storageContextKey={storageContextKey}
+        />
       )}
     </>
   );
 }
 
 function MCPSelect() {
-  const { mcpServerManager } = useBadgeRowContext();
-  const { selectableServers } = mcpServerManager;
+  const context = useBadgeRowContext();
+  const { selectableServers } = context?.mcpServerManager ?? {};
   const canUseMcp = useHasAccess({
     permissionType: PermissionTypes.MCP_SERVERS,
     permission: Permissions.USE,

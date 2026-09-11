@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Maximize2 } from 'lucide-react';
+import { Button } from '@librechat/client';
+import { Maximize2, X } from 'lucide-react';
 import { FileSources } from 'librechat-data-provider';
-import { OGDialog, OGDialogContent } from '@librechat/client';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
 import ProgressCircle from './ProgressCircle';
 import SourceIcon from './SourceIcon';
+import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
 type styleProps = {
@@ -28,9 +30,13 @@ const ImagePreview = ({
   source?: FileSources;
   alt?: string;
 }) => {
+  const localize = useLocalize();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const openModal = useCallback(() => {
     setIsModalOpen(true);
@@ -45,6 +51,16 @@ const ImagePreview = ({
     }
   }, []);
 
+  // Handle click on background areas to close (only if clicking the overlay/content directly)
+  const handleBackgroundClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.target === e.currentTarget) {
+        handleOpenChange(false);
+      }
+    },
+    [handleOpenChange],
+  );
+
   useEffect(() => {
     if (isModalOpen) {
       document.body.style.overflow = 'hidden';
@@ -56,6 +72,18 @@ const ImagePreview = ({
       document.body.style.overflow = 'unset';
     };
   }, [isModalOpen]);
+
+  // Handle escape key
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleOpenChange(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isModalOpen, handleOpenChange]);
 
   const baseStyle: styleProps = {
     backgroundSize: 'cover',
@@ -83,26 +111,32 @@ const ImagePreview = ({
     transition: 'stroke-dashoffset 0.3s linear',
   };
 
+  /** Keyboard users need the same expand affordance the pointer gets on hover. */
+  const showExpandAffordance = isHovered || isFocused;
+
   return (
     <>
-      <div
-        className={cn('relative size-14 rounded-xl', className)}
+      <button
+        ref={triggerRef}
+        type="button"
+        className={cn(
+          'relative size-14 overflow-hidden rounded-xl transition-shadow',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-text-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary',
+          className,
+        )}
+        style={style}
+        aria-label={`View ${alt} in full size`}
+        aria-haspopup="dialog"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openModal();
+        }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
       >
-        <button
-          ref={triggerRef}
-          type="button"
-          className="size-full overflow-hidden rounded-xl"
-          style={style}
-          aria-label={`View ${alt} in full size`}
-          aria-haspopup="dialog"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openModal();
-          }}
-        />
         {progress < 1 ? (
           <ProgressCircle
             circumference={circumference}
@@ -114,38 +148,65 @@ const ImagePreview = ({
           <div
             className={cn(
               'absolute inset-0 flex transform-gpu cursor-pointer items-center justify-center rounded-xl transition-opacity duration-200 ease-in-out',
-              isHovered ? 'bg-black/20 opacity-100' : 'opacity-0',
+              showExpandAffordance ? 'bg-black/20 opacity-100' : 'opacity-0',
             )}
-            onClick={(e) => {
-              e.stopPropagation();
-              openModal();
-            }}
             aria-hidden="true"
           >
             <Maximize2
               className={cn(
                 'size-5 transform-gpu text-white drop-shadow-lg transition-all duration-200',
-                isHovered ? 'scale-110' : '',
+                showExpandAffordance ? 'scale-110' : '',
               )}
             />
           </div>
         )}
         <SourceIcon source={source} aria-label={source ? `Source: ${source}` : undefined} />
-      </div>
+      </button>
 
-      <OGDialog open={isModalOpen} onOpenChange={handleOpenChange}>
-        <OGDialogContent
-          showCloseButton={false}
-          className="w-11/12 overflow-x-auto bg-transparent p-0 sm:w-auto"
-          disableScroll={false}
-        >
-          <img
-            src={imageUrl}
-            alt={alt}
-            className="max-w-screen h-full max-h-screen w-full object-contain"
+      <DialogPrimitive.Root open={isModalOpen} onOpenChange={handleOpenChange}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay
+            className="fixed inset-0 z-[250] bg-black/90"
+            onClick={handleBackgroundClick}
           />
-        </OGDialogContent>
-      </OGDialog>
+          <DialogPrimitive.Content
+            className="fixed inset-0 z-[250] flex items-center justify-center outline-none"
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              closeButtonRef.current?.focus();
+            }}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault();
+              triggerRef.current?.focus();
+            }}
+            onPointerDownOutside={(e) => e.preventDefault()}
+            onClick={handleBackgroundClick}
+          >
+            {/* Close button */}
+            <Button
+              ref={closeButtonRef}
+              onClick={() => handleOpenChange(false)}
+              variant="ghost"
+              size="icon"
+              className="absolute right-4 top-4 z-20 text-white hover:bg-white/10"
+              aria-label={localize('com_ui_close')}
+            >
+              <X className="size-5" aria-hidden="true" />
+            </Button>
+
+            {/* Image container */}
+            <div onClick={(e) => e.stopPropagation()}>
+              <img
+                ref={imageRef}
+                src={imageUrl}
+                alt={alt}
+                className="max-h-[85vh] max-w-[90vw] object-contain"
+                draggable={false}
+              />
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
     </>
   );
 };

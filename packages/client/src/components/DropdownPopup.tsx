@@ -1,6 +1,7 @@
 import React from 'react';
 import * as Ariakit from '@ariakit/react';
 import type * as t from '~/common';
+import { usePopoverZIndex } from './OriginalDialog';
 import { cn } from '~/utils';
 import './Dropdown.css';
 
@@ -18,6 +19,7 @@ interface DropdownProps {
   gutter?: number;
   modal?: boolean;
   portal?: boolean;
+  portalElement?: Ariakit.MenuProps['portalElement'];
   preserveTabOrder?: boolean;
   focusLoop?: boolean;
   menuId: string;
@@ -71,10 +73,12 @@ const Menu: React.FC<MenuProps> = ({
   finalFocus,
   unmountOnHide,
   preserveTabOrder,
+  style,
   ...props
 }) => {
   const menuStore = Ariakit.useMenuStore();
   const menu = Ariakit.useMenuContext();
+  const zIndex = usePopoverZIndex();
   return (
     <Ariakit.Menu
       id={menuId}
@@ -85,7 +89,12 @@ const Menu: React.FC<MenuProps> = ({
       finalFocus={finalFocus}
       unmountOnHide={unmountOnHide}
       preserveTabOrder={preserveTabOrder}
-      className={cn('popover-ui z-50', className)}
+      /* Portaled menus land beside modal OGDialog layers, which set
+         `pointer-events: none` on body and re-enable it only on their own
+         content. Without this the menu inherits `none` and its items become
+         hit-transparent (danny-avila/LibreChat#14487). */
+      style={{ zIndex, pointerEvents: 'auto', ...style }}
+      className={cn('popover-ui', className)}
       {...props}
     >
       {items
@@ -103,7 +112,7 @@ const Menu: React.FC<MenuProps> = ({
               >
                 <Ariakit.MenuButton
                   className={cn(
-                    'group flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-3.5 text-sm text-text-primary outline-none transition-colors duration-200 hover:bg-surface-hover focus:bg-surface-hover md:px-2.5 md:py-2',
+                    'group flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-3.5 text-sm text-text-primary outline-none hover:bg-surface-hover focus:bg-surface-hover md:px-2.5 md:py-2',
                     itemClassName,
                   )}
                   disabled={item.disabled}
@@ -138,7 +147,7 @@ const Menu: React.FC<MenuProps> = ({
               key={`${keyPrefix ?? ''}${index}-${item.id ?? ''}`}
               id={item.id}
               className={cn(
-                'group flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-3.5 text-sm text-text-primary outline-none transition-colors duration-200 hover:bg-surface-hover focus:bg-surface-hover md:px-2.5 md:py-2',
+                'group flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-3.5 text-sm text-text-primary outline-none hover:bg-surface-hover focus:bg-surface-hover md:px-2.5 md:py-2',
                 itemClassName,
                 item.className,
               )}
@@ -148,6 +157,9 @@ const Menu: React.FC<MenuProps> = ({
               hideOnClick={item.hideOnClick}
               aria-haspopup={item.ariaHasPopup}
               aria-controls={item.ariaControls}
+              aria-label={item.ariaLabel}
+              aria-checked={item.ariaChecked}
+              {...(item.ariaChecked !== undefined ? { role: 'menuitemcheckbox' } : {})}
               onClick={(event) => {
                 event.preventDefault();
                 if (item.onClick) {
@@ -166,7 +178,7 @@ const Menu: React.FC<MenuProps> = ({
               )}
               {item.label}
               {item.kbd != null && (
-                <kbd className="ml-auto hidden font-sans text-xs text-black/50 group-hover:inline group-focus:inline dark:text-white/50">
+                <kbd className="ml-auto hidden font-sans text-xs text-text-tertiary group-hover:inline group-focus:inline">
                   ⌘{item.kbd}
                 </kbd>
               )}

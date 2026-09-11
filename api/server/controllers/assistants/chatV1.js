@@ -1,7 +1,19 @@
 const { v4 } = require('uuid');
 const { sleep } = require('@librechat/agents');
 const { logger } = require('@librechat/data-schemas');
-const { sendEvent, getBalanceConfig, getModelMaxTokens, countTokens } = require('@librechat/api');
+const {
+  sendEvent,
+  countTokens,
+  checkBalance,
+  getBalanceConfig,
+  getModelMaxTokens,
+  getTransactionsConfig,
+  ATTACHMENT_ONLY_TEXT,
+  isContentFilterError,
+  hasActiveFilePolicy,
+  preflightAssistantRunContent,
+  preflightAssistantUserMessageContent,
+} = require('@librechat/api');
 const {
   Time,
   Constants,
@@ -31,10 +43,17 @@ const { createRun, StreamRunManager } = require('~/server/services/Runs');
 const { addTitle } = require('~/server/services/Endpoints/assistants');
 const { createRunBody } = require('~/server/services/createRunBody');
 const { sendResponse } = require('~/server/middleware/error');
-const { getTransactions } = require('~/models/Transaction');
-const { checkBalance } = require('~/models/balanceMethods');
-const { getConvo } = require('~/models/Conversation');
-const getLogStores = require('~/cache/getLogStores');
+const setHeaders = require('~/server/middleware/setHeaders');
+const {
+  createAutoRefillTransaction,
+  findBalanceByUser,
+  upsertBalanceFields,
+  getTransactions,
+  getMultiplier,
+  getConvo,
+  getFiles,
+} = require('~/models');
+const { logViolation, getLogStores } = require('~/cache');
 const { getOpenAIClient } = require('./helpers');
 
 /**
@@ -48,7 +67,6 @@ const { getOpenAIClient } = require('./helpers');
  */
 const chatV1 = async (req, res) => {
   const appConfig = req.config;
-  logger.debug('[/assistants/chat/] req.body', req.body);
 
   const {
     text,
@@ -65,6 +83,13 @@ const chatV1 = async (req, res) => {
     parentMessageId: _parentId = Constants.NO_PARENT,
     clientTimestamp,
   } = req.body;
+  logger.debug('[/assistants/chat/] request', {
+    endpoint,
+    conversationId: convoId,
+    assistantId: assistant_id,
+    hasText: typeof text === 'string' && text.length > 0,
+    fileCount: Array.isArray(files) ? files.length : 0,
+  });
 
   /** @type {OpenAI} */
   let openai;
@@ -98,6 +123,7 @@ const chatV1 = async (req, res) => {
 
   /** @type {Run | undefined} - The completed run, undefined if incomplete */
   let completedRun;
+  let contentRejected = false;
 
   const handleError = async (error) => {
     const defaultErrorMessage =
@@ -169,6 +195,7 @@ const chatV1 = async (req, res) => {
         model: run.model,
         user: req.user.id,
         conversationId,
+        transactions: getTransactionsConfig(req.config),
       });
     } catch (error) {
       logger.error('[/assistants/chat/] Error fetching or processing run', error);
@@ -236,7 +263,7 @@ const chatV1 = async (req, res) => {
 
   try {
     res.on('close', async () => {
-      if (!completedRun) {
+      if (!completedRun && !contentRejected) {
         await handleError(new Error('Request closed'));
       }
     });
@@ -275,16 +302,26 @@ const chatV1 = async (req, res) => {
       // Count tokens up to the current context window
       promptTokens = Math.min(promptTokens, getModelMaxTokens(model));
 
-      await checkBalance({
-        req,
-        res,
-        txData: {
-          model,
-          user: req.user.id,
-          tokenType: 'prompt',
-          amount: promptTokens,
+      await checkBalance(
+        {
+          req,
+          res,
+          txData: {
+            model,
+            user: req.user.id,
+            tokenType: 'prompt',
+            amount: promptTokens,
+          },
         },
-      });
+        {
+          findBalanceByUser,
+          getMultiplier,
+          createAutoRefillTransaction,
+          logViolation,
+          balanceConfig,
+          upsertBalanceFields,
+        },
+      );
     };
 
     const { openai: _openai } = await getOpenAIClient({
@@ -295,14 +332,35 @@ const chatV1 = async (req, res) => {
 
     openai = _openai;
     await validateAuthor({ req, openai });
-
+    let persistedAssistant;
+    try {
+      persistedAssistant = await preflightAssistantRunContent({
+        config: req.config,
+        openai,
+        user: req.user,
+        assistantId: assistant_id,
+        threadId: _thread_id,
+        getFiles,
+      });
+    } catch (error) {
+      if (!isContentFilterError(error)) {
+        throw error;
+      }
+      contentRejected = true;
+      return res.status(error.statusCode).json(error.body);
+    }
     if (previousMessages.length) {
       parentMessageId = previousMessages[previousMessages.length - 1].messageId;
     }
 
+    /**
+     * Threads rejects an empty message body, so an attachment-only turn sends
+     * a minimal note instead. The persisted message keeps its empty text.
+     */
+    const isAttachmentOnly = !text?.trim() && files.length > 0;
     let userMessage = {
       role: 'user',
-      content: text,
+      content: isAttachmentOnly ? ATTACHMENT_ONLY_TEXT : text,
       metadata: {
         messageId: userMessageId,
       },
@@ -352,7 +410,7 @@ const chatV1 = async (req, res) => {
         return;
       }
 
-      const assistant = await openai.beta.assistants.retrieve(assistant_id);
+      const assistant = persistedAssistant ?? (await openai.beta.assistants.retrieve(assistant_id));
       const visionToolIndex = assistant.tools.findIndex(
         (tool) => tool?.function && tool?.function?.name === ImageVisionTool.function.name,
       );
@@ -405,10 +463,16 @@ const chatV1 = async (req, res) => {
 
     /** @type {Promise<Run>|undefined} */
     let userMessagePromise;
+    const inspectFinalMessageFiles = hasActiveFilePolicy(req.config?.filters);
 
     const initializeThread = async () => {
-      /** @type {[ undefined | MongoFile[]]}*/
-      const [processedFiles] = await Promise.all([addVisionPrompt(), getRequestFileIds()]);
+      /** @type {undefined | MongoFile[]} */
+      let processedFiles;
+      if (inspectFinalMessageFiles) {
+        processedFiles = await addVisionPrompt();
+      } else {
+        [processedFiles] = await Promise.all([addVisionPrompt(), getRequestFileIds()]);
+      }
       // TODO: may allow multiple messages to be created beforehand in a future update
       const initThreadBody = {
         messages: [userMessage],
@@ -477,6 +541,24 @@ const chatV1 = async (req, res) => {
         conversation.file_ids = file_ids;
       }
     };
+
+    if (inspectFinalMessageFiles) {
+      await getRequestFileIds();
+      try {
+        await preflightAssistantUserMessageContent({
+          config: req.config,
+          user: req.user,
+          message: userMessage,
+          getFiles,
+        });
+      } catch (error) {
+        if (!isContentFilterError(error)) {
+          throw error;
+        }
+        contentRejected = true;
+        return res.status(error.statusCode).json(error.body);
+      }
+    }
 
     const promises = [initializeThread(), checkBalanceBeforeRun()];
     await Promise.all(promises);
@@ -567,6 +649,23 @@ const chatV1 = async (req, res) => {
       response = streamRunManager;
     };
 
+    try {
+      await preflightAssistantRunContent({
+        config: req.config,
+        openai,
+        user: req.user,
+        assistantId: assistant_id,
+        threadId: thread_id,
+        getFiles,
+      });
+    } catch (error) {
+      if (!isContentFilterError(error)) {
+        throw error;
+      }
+      contentRejected = true;
+      return res.status(error.statusCode).json(error.body);
+    }
+    setHeaders(req, res, () => {});
     await processRun();
     logger.debug('[/assistants/chat/] response', {
       run: response.run,
@@ -637,6 +736,7 @@ const chatV1 = async (req, res) => {
           user: req.user.id,
           model: completedRun.model ?? model,
           conversationId,
+          transactions: getTransactionsConfig(req.config),
         });
       }
     } else {
@@ -645,6 +745,7 @@ const chatV1 = async (req, res) => {
         user: req.user.id,
         model: response.run.model ?? model,
         conversationId,
+        transactions: getTransactionsConfig(req.config),
       });
     }
   } catch (error) {

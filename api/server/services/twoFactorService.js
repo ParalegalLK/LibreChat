@@ -1,4 +1,4 @@
-const { webcrypto } = require('node:crypto');
+const { webcrypto, timingSafeEqual } = require('node:crypto');
 const { hashBackupCode, decryptV3, decryptV2 } = require('@librechat/data-schemas');
 const { updateUser } = require('~/models');
 
@@ -103,6 +103,31 @@ const generateTOTP = async (secret, forTime = Date.now()) => {
 };
 
 /**
+ * Constant-time comparison of a candidate 2FA code against the expected value.
+ * A plain `===` comparison short-circuits at the first differing character, so
+ * an attacker submitting codes to the 2FA verification endpoint could, in
+ * principle, learn how many leading digits are correct from the response time.
+ * Codes are of a fixed, public length, so returning early on a length mismatch
+ * (or a non-string input) leaks nothing secret while keeping the match path
+ * timing-independent. Mirrors the `crypto.timingSafeEqual(Buffer.from(...))`
+ * pattern already used for CSRF token checks in `packages/api`.
+ * @param {string} expected
+ * @param {string} candidate
+ * @returns {boolean}
+ */
+const constantTimeEqual = (expected, candidate) => {
+  if (typeof expected !== 'string' || typeof candidate !== 'string') {
+    return false;
+  }
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  const candidateBuffer = Buffer.from(candidate, 'utf8');
+  if (expectedBuffer.length !== candidateBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(expectedBuffer, candidateBuffer);
+};
+
+/**
  * Verifies a TOTP token by checking a ±1 time step window.
  * @param {string} secret
  * @param {string} token
@@ -113,7 +138,7 @@ const verifyTOTP = async (secret, token) => {
   const currentTime = Date.now();
   for (let offset = -1; offset <= 1; offset++) {
     const expected = await generateTOTP(secret, currentTime + offset * timeStepMS);
-    if (expected === token) {
+    if (constantTimeEqual(expected, token)) {
       return true;
     }
   }
@@ -153,9 +178,11 @@ const generateBackupCodes = async (count = 10) => {
  * @param {Object} params
  * @param {Object} params.user
  * @param {string} params.backupCode
+ * @param {boolean} [params.persist=true] - Whether to persist the used-mark to the database.
+ *   Pass `false` when the caller will immediately overwrite `backupCodes` (e.g. re-enrollment).
  * @returns {Promise<boolean>}
  */
-const verifyBackupCode = async ({ user, backupCode }) => {
+const verifyBackupCode = async ({ user, backupCode, persist = true }) => {
   if (!backupCode || !user || !Array.isArray(user.backupCodes)) {
     return false;
   }
@@ -165,17 +192,50 @@ const verifyBackupCode = async ({ user, backupCode }) => {
     (codeObj) => codeObj.codeHash === hashedInput && !codeObj.used,
   );
 
-  if (matchingCode) {
+  if (!matchingCode) {
+    return false;
+  }
+
+  if (persist) {
     const updatedBackupCodes = user.backupCodes.map((codeObj) =>
       codeObj.codeHash === hashedInput && !codeObj.used
         ? { ...codeObj, used: true, usedAt: new Date() }
         : codeObj,
     );
-    // Update the user record with the marked backup code.
     await updateUser(user._id, { backupCodes: updatedBackupCodes });
-    return true;
   }
-  return false;
+  return true;
+};
+
+/**
+ * Verifies a user's identity via TOTP token or backup code.
+ * @param {Object} params
+ * @param {Object} params.user - The user document (must include totpSecret and backupCodes).
+ * @param {string} [params.token] - A 6-digit TOTP token.
+ * @param {string} [params.backupCode] - An 8-character backup code.
+ * @param {boolean} [params.persistBackupUse=true] - Whether to mark the backup code as used in the DB.
+ * @returns {Promise<{ verified: boolean, status?: number, message?: string }>}
+ */
+const verifyOTPOrBackupCode = async ({ user, token, backupCode, persistBackupUse = true }) => {
+  if (!token && !backupCode) {
+    return { verified: false, status: 400 };
+  }
+
+  if (token) {
+    const secret = await getTOTPSecret(user.totpSecret);
+    if (!secret) {
+      return { verified: false, status: 400, message: '2FA secret is missing or corrupted' };
+    }
+    const ok = await verifyTOTP(secret, token);
+    return ok
+      ? { verified: true }
+      : { verified: false, status: 401, message: 'Invalid token or backup code' };
+  }
+
+  const ok = await verifyBackupCode({ user, backupCode, persist: persistBackupUse });
+  return ok
+    ? { verified: true }
+    : { verified: false, status: 401, message: 'Invalid token or backup code' };
 };
 
 /**
@@ -213,11 +273,12 @@ const generate2FATempToken = (userId) => {
 };
 
 module.exports = {
-  generateTOTPSecret,
-  generateTOTP,
-  verifyTOTP,
+  verifyOTPOrBackupCode,
+  generate2FATempToken,
   generateBackupCodes,
+  generateTOTPSecret,
   verifyBackupCode,
   getTOTPSecret,
-  generate2FATempToken,
+  generateTOTP,
+  verifyTOTP,
 };

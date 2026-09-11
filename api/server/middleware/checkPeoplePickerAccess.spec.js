@@ -1,9 +1,14 @@
 const { logger } = require('@librechat/data-schemas');
-const { PrincipalType, PermissionTypes, Permissions } = require('librechat-data-provider');
+const {
+  PrincipalType,
+  PermissionTypes,
+  Permissions,
+  SystemRoles,
+} = require('librechat-data-provider');
 const { checkPeoplePickerAccess } = require('./checkPeoplePickerAccess');
-const { getRoleByName } = require('~/models/Role');
+const { getRoleByName } = require('~/models');
 
-jest.mock('~/models/Role');
+jest.mock('~/models');
 jest.mock('@librechat/data-schemas', () => ({
   ...jest.requireActual('@librechat/data-schemas'),
   logger: {
@@ -51,6 +56,16 @@ describe('checkPeoplePickerAccess', () => {
       message: 'No permissions configured for user role',
     });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('allows a literal admin regardless of configured people picker permissions', async () => {
+    req.user.role = SystemRoles.ADMIN;
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(getRoleByName).not.toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
   });
 
   it('should allow access when searching for users with VIEW_USERS permission', async () => {
@@ -173,6 +188,171 @@ describe('checkPeoplePickerAccess', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it('should deny access when using types param to bypass type-specific check', async () => {
+    req.query.types = PrincipalType.GROUP;
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Forbidden',
+      message: 'Insufficient permissions to search for groups',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should deny access when types contains any unpermitted type', async () => {
+    req.query.types = `${PrincipalType.USER},${PrincipalType.ROLE}`;
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Forbidden',
+      message: 'Insufficient permissions to search for roles',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should allow access when all requested types are permitted', async () => {
+    req.query.types = `${PrincipalType.USER},${PrincipalType.GROUP}`;
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: true,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('should validate types when provided as array (Express qs parsing)', async () => {
+    req.query.types = [PrincipalType.GROUP, PrincipalType.ROLE];
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: true,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Forbidden',
+      message: 'Insufficient permissions to search for groups',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should enforce permissions for combined type and types params', async () => {
+    req.query.type = PrincipalType.USER;
+    req.query.types = PrincipalType.GROUP;
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Forbidden',
+      message: 'Insufficient permissions to search for groups',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should treat all-invalid types values as mixed search', async () => {
+    req.query.types = 'foobar';
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('should deny when types is empty string and user has no permissions', async () => {
+    req.query.types = '';
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: false,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Forbidden',
+      message: 'Insufficient permissions to search for users, groups, or roles',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should treat types=public as mixed search since PUBLIC is not a searchable principal type', async () => {
+    req.query.types = PrincipalType.PUBLIC;
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      },
+    });
+
+    await checkPeoplePickerAccess(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
   it('should allow mixed search when user has at least one permission', async () => {
     // No type specified = mixed search
     req.query.type = undefined;
@@ -222,7 +402,7 @@ describe('checkPeoplePickerAccess', () => {
     await checkPeoplePickerAccess(req, res, next);
 
     expect(logger.error).toHaveBeenCalledWith(
-      '[checkPeoplePickerAccess][user123] checkPeoplePickerAccess error for req.query.type = undefined',
+      '[checkPeoplePickerAccess][user123] error for type=undefined, types=undefined',
       error,
     );
     expect(res.status).toHaveBeenCalledWith(500);

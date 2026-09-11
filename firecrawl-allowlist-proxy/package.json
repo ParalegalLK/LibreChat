@@ -1,0 +1,9 @@
+{
+  "name": "firecrawl-allowlist-proxy",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

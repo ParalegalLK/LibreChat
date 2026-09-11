@@ -76,11 +76,11 @@ function DynamicDropdown({
             <div className="flex w-full justify-between">
               <Label
                 htmlFor={`${settingKey}-dynamic-dropdown`}
-                className="text-left text-sm font-medium"
+                className="text-left text-xs font-medium"
               >
                 {labelCode ? (localize(label as TranslationKeys) ?? label) : label || settingKey}
                 {showDefault && (
-                  <small className="opacity-40">
+                  <small className="opacity-40 high-contrast:opacity-100">
                     ({localize('com_endpoint_default')}: {defaultValue})
                   </small>
                 )}
@@ -95,6 +95,7 @@ function DynamicDropdown({
             setValue={handleChange}
             availableValues={options}
             containerClassName="w-full"
+            className="py-1.5"
             id={`${settingKey}-dynamic-dropdown`}
             placeholder={
               placeholderCode
