@@ -194,3 +194,7 @@ CLAUDE.md
 .gsd
 codedb.snapshot
 scripts/activity-labels/results/
+
+# Per-firm invite lists, results, and recipient lists (contain user emails / invite links)
+config/*.txt
+config/*.csv
