@@ -1,11 +1,19 @@
 import { Schema } from 'mongoose';
 import {
+  MAX_COMPACTION_SEMANTIC_INDEX_ENTRIES,
+  MAX_COMPACTION_SEMANTIC_INDEX_IDENTITY_LENGTH,
+  MAX_COMPACTION_SEMANTIC_INDEX_SOURCE_CONTENT_INDEX,
+  MAX_COMPACTION_SEMANTIC_INDEX_TEXT_LENGTH,
+  isCompactionSemanticIndexProjection,
+} from '~/types/compaction';
+import {
   MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS,
   MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH,
   MAX_AGENT_EVENT_ACTOR_SKILLS,
   MAX_AGENT_EVENT_ACTOR_SUMMARY_LENGTH,
   MAX_AGENT_EVENT_ACTOR_TOOL_NAME_LENGTH,
 } from '~/types/convo';
+import { agentFadingContextDefinition } from './fading';
 import { conversationPreset } from './defaults';
 import { IConversation } from '~/types';
 
@@ -35,6 +43,11 @@ const convoSchema: Schema<IConversation> = new Schema(
     ...conversationPreset,
     agent_id: {
       type: String,
+    },
+    initial_agent_id: {
+      type: String,
+      default: undefined,
+      select: false,
     },
     subagentThread: {
       type: {
@@ -140,9 +153,70 @@ const convoSchema: Schema<IConversation> = new Schema(
               maxlength: MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH,
               default: undefined,
             },
+            ...agentFadingContextDefinition,
           },
           _id: false,
           default: undefined,
+        },
+        compactionSemanticIndex: {
+          type: {
+            version: { type: Number, enum: [1], required: true },
+            entries: {
+              type: [
+                {
+                  type: {
+                    type: String,
+                    enum: ['tool_intent', 'tool_outcome', 'activity_phase', 'reasoning_label'],
+                    required: true,
+                  },
+                  sourceMessageId: {
+                    type: String,
+                    minlength: 1,
+                    maxlength: MAX_COMPACTION_SEMANTIC_INDEX_IDENTITY_LENGTH,
+                    required: true,
+                  },
+                  sourceContentIndex: {
+                    type: Number,
+                    min: 0,
+                    max: MAX_COMPACTION_SEMANTIC_INDEX_SOURCE_CONTENT_INDEX,
+                    required: true,
+                  },
+                  revision: { type: Number, min: 0, required: true },
+                  status: { type: String, enum: ['committed', 'pending'], required: true },
+                  text: {
+                    type: String,
+                    maxlength: MAX_COMPACTION_SEMANTIC_INDEX_TEXT_LENGTH,
+                  },
+                  redacted: { type: Boolean, default: undefined },
+                  toolCallId: {
+                    type: String,
+                    minlength: 1,
+                    maxlength: MAX_COMPACTION_SEMANTIC_INDEX_IDENTITY_LENGTH,
+                    default: undefined,
+                  },
+                  reasoningStepId: {
+                    type: String,
+                    minlength: 1,
+                    maxlength: MAX_COMPACTION_SEMANTIC_INDEX_IDENTITY_LENGTH,
+                    default: undefined,
+                  },
+                  _id: false,
+                },
+              ],
+              validate: {
+                validator: (entries: unknown[]) =>
+                  entries.length <= MAX_COMPACTION_SEMANTIC_INDEX_ENTRIES,
+                message: `Compaction semantic index exceeds ${MAX_COMPACTION_SEMANTIC_INDEX_ENTRIES} entries`,
+              },
+            },
+            providedEntryCount: { type: Number, min: 0, default: undefined },
+          },
+          _id: false,
+          default: undefined,
+          validate: {
+            validator: isCompactionSemanticIndexProjection,
+            message: 'Compaction semantic index projection is invalid',
+          },
         },
         previousCheckpoint: {
           type: {
@@ -162,6 +236,18 @@ const convoSchema: Schema<IConversation> = new Schema(
     /** Fail-closed invocation proof. Active records block later turns through checkpoint,
      * history, and outcome settlement; settled receipts no longer block new IDs but keep
      * delayed owners from reacquiring an invocation that already applied its action. */
+    agentEventActorCleanup: {
+      type: [
+        {
+          threadId: { type: String, required: true },
+          checkpointId: { type: String, required: true },
+          checkpointNs: { type: String, required: true },
+          _id: false,
+        },
+      ],
+      default: undefined,
+      select: false,
+    },
     agentEventActorReconciliations: {
       type: [
         {
@@ -250,7 +336,11 @@ const convoSchema: Schema<IConversation> = new Schema(
         handlingGenerationCreatedAt: { type: Number, min: 0, default: undefined },
         actionId: { type: String, required: true },
         jobCreatedAt: { type: Number, required: true },
-        status: { type: String, enum: ['pending', 'claimed', 'closed'], required: true },
+        status: {
+          type: String,
+          enum: ['pending', 'claimed', 'pending_owned', 'claimed_owned', 'closed'],
+          required: true,
+        },
         resumeAttemptId: { type: String, default: undefined },
         outcome: {
           type: String,
@@ -302,6 +392,10 @@ convoSchema.index({ expiredAt: 1 }, { expireAfterSeconds: 0 });
 convoSchema.index({ createdAt: 1, updatedAt: 1 });
 convoSchema.index({ conversationId: 1, user: 1, tenantId: 1 }, { unique: true });
 convoSchema.index({ tenantId: 1, isTemporary: 1, createdAt: -1, _id: -1 });
+/** Insights attributes new conversations by an immutable primary agent and falls back
+ * to the mutable agent field only for legacy rows where the primary field is absent. */
+convoSchema.index({ tenantId: 1, isTemporary: 1, initial_agent_id: 1, createdAt: -1, _id: -1 });
+convoSchema.index({ tenantId: 1, isTemporary: 1, agent_id: 1, createdAt: -1, _id: -1 });
 convoSchema.index({ user: 1, _id: 1 });
 convoSchema.index({ user: 1, chatProjectId: 1, updatedAt: -1, _id: -1 });
 convoSchema.index({ user: 1, chatProjectId: 1, createdAt: -1, _id: -1 });

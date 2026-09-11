@@ -41,6 +41,7 @@ const ASK_USER_QUESTION_MARKER = 'E2E_ASK_USER_QUESTION:';
 const RESUME_ICON_REPLY_MARKER = 'E2E_RESUME_ICON_REPLY:';
 const FORCED_ERROR_MARKER = 'E2E_FORCED_ERROR:';
 const MARKDOWN_REPLY_MARKER = 'E2E_MARKDOWN_REPLY';
+const STATEFUL_CODE_MARKER = 'E2E_STATEFUL_CODE:';
 /** Two prose paragraphs, so a spec can select the message's *closing* block. */
 const PARAGRAPHS_REPLY_MARKER = 'E2E_PARAGRAPHS_REPLY';
 const MERMAID_ARTIFACT_REPLY_MARKER = 'E2E_MERMAID_ARTIFACT_REPLY';
@@ -88,6 +89,7 @@ const RESUME_ICON_REPLY_CHUNKS = 240;
 const CREATE_FILE_TOOL_NAME = 'create_file';
 const EDIT_FILE_TOOL_NAME = 'edit_file';
 const BASH_TOOL_NAME = 'bash_tool';
+const STATEFUL_CODE_VALUE = 'librechat-bridge-persisted';
 const SKILL_TOOL_NAME = 'skill';
 const CREATE_SKILL_TOOL_CALL_ID = 'call_e2e_create_skill';
 const EDIT_SKILL_TOOL_CALL_ID = 'call_e2e_edit_skill';
@@ -101,6 +103,27 @@ const APPROVAL_TOOL_NAME = 'approval_probe_mcp_e2e-memory';
 const APPROVAL_TOOL_CALL_PREFIX = 'call_e2e_approval_';
 const BACKGROUND_DISPATCH_TOOL_CALL_ID = 'call_e2e_background_dispatch';
 const BACKGROUND_COLLECT_TOOL_CALL_ID = 'call_e2e_background_collect';
+const EXECUTE_CODE_MARKER = 'E2E_EXECUTE_CODE:';
+const EXEC_UPLOADED_MARKER = 'E2E_EXEC_UPLOADED:';
+const EXEC_PERSIST_MARKER = 'E2E_EXEC_PERSIST:';
+const FILE_SEARCH_MARKER = 'E2E_FILE_SEARCH:';
+/** Code Interpreter advertises bash_tool/read_file at runtime (execute_code is legacy);
+ *  emit whichever the agent actually exposes so the tool batch — and provisioning — fires. */
+const CODE_EXEC_TOOLS = [
+  { name: 'bash_tool', args: { command: 'echo e2e' } },
+  { name: 'read_file', args: { path: '/mnt/data' } },
+  { name: 'execute_code', args: { lang: 'py', code: 'print("e2e")' } },
+];
+const FILE_SEARCH_TOOL_NAME = 'file_search';
+const EXECUTE_CODE_FINAL_TEXT = 'E2E execute_code complete';
+const FILE_SEARCH_FINAL_TEXT = 'E2E file_search complete';
+const EXECUTE_CODE_TOOL_CALL_ID = 'call_e2e_execute_code';
+const EXEC_UPLOADED_TOOL_CALL_ID = 'call_e2e_exec_uploaded';
+const EXEC_PERSIST_TOOL_CALL_ID = 'call_e2e_exec_persist';
+const EXEC_UPLOADED_FINAL_TEXT = 'E2E code exec complete';
+const EXEC_PERSIST_FINAL_TEXT = 'E2E code persistence complete';
+const EXEC_TURN_MARKER_FILE = 'e2e-turn1-marker.txt';
+const FILE_SEARCH_TOOL_CALL_ID = 'call_e2e_file_search';
 const MODEL_SPEC_ACCESSIBLE_SKILL = 'e2e-model-spec-allowed';
 const DEPLOYMENT_SKILL_NAME = 'e2e-deployment-skill';
 const ALWAYS_APPLY_BODY_MARKER = 'E2E_ALWAYS_APPLY_BODY_MARKER';
@@ -171,6 +194,15 @@ function getRequestedSkillName(text, marker) {
   }
   const afterMarker = text.slice(markerIndex + marker.length);
   return afterMarker.match(/[a-z0-9][a-z0-9-]*/)?.[0] ?? '';
+}
+
+function getRequestedSandboxFilename(text, marker) {
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex === -1) {
+    return '';
+  }
+  const afterMarker = text.slice(markerIndex + marker.length);
+  return afterMarker.match(/[A-Za-z0-9][A-Za-z0-9._-]*/)?.[0] ?? '';
 }
 
 function getMarkerValue(text, marker) {
@@ -1629,6 +1661,61 @@ function backgroundCollectResponses(messages, toolNames) {
   };
 }
 
+/** Fresh host-owned run started when the detached result becomes durable. */
+function backgroundCompletionResponses(text) {
+  if (!text.includes('background tool task has finished') || !text.includes('durable result')) {
+    return null;
+  }
+  const status = text.match(/"status":"(\w+)"/)?.[1] ?? 'missing';
+  const echo = text.match(/E2E slow echo: (bg-[\w-]+)/)?.[1] ?? 'missing';
+  return {
+    responses: [''],
+    resolveInvocation: async (_messages, options, runManager) => {
+      const agentId = getAgentIdFromInvocationOptions(options, runManager) ?? 'missing';
+      return {
+        response: `E2E background notified status=${status} echo=${echo} agent=${agentId}`,
+      };
+    },
+  };
+}
+
+function statefulCodeResponses(operation, toolNames) {
+  if (!toolNames.has(BASH_TOOL_NAME)) {
+    return {
+      responses: [`E2E stateful code unavailable: ${BASH_TOOL_NAME} was not advertised.`],
+    };
+  }
+
+  const commands = {
+    write: `printf ${STATEFUL_CODE_VALUE} > librechat-bridge-state.txt && cat librechat-bridge-state.txt`,
+    read: 'cat librechat-bridge-state.txt',
+  };
+  const command = commands[operation];
+  if (!command) {
+    return { responses: [`E2E stateful code failed: unsupported operation ${operation}`] };
+  }
+
+  const toolCallId = `call_e2e_stateful_code_${operation}`;
+  return {
+    responses: ['', ''],
+    toolCalls: [
+      {
+        id: toolCallId,
+        name: BASH_TOOL_NAME,
+        args: { command },
+        type: 'tool_call',
+      },
+    ],
+    resolveOnStream: (streamMessages) => {
+      const toolMessage = findLastToolMessage(streamMessages, toolCallId);
+      if (!getContentText(toolMessage?.content).includes(STATEFUL_CODE_VALUE)) {
+        return null;
+      }
+      return { responses: [`E2E stateful code ${operation} observed ${STATEFUL_CODE_VALUE}`] };
+    },
+  };
+}
+
 function parseHandoffScript(text) {
   const encodedScript = getMarkerValue(text, HANDOFF_MARKER);
   if (!encodedScript) {
@@ -1777,6 +1864,16 @@ function findToolMessage(messages, toolCallId) {
   return (messages ?? []).find(
     (message) => messageType(message) === 'tool' && message?.tool_call_id === toolCallId,
   );
+}
+
+function findLastToolMessage(messages, toolCallId) {
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (messageType(message) === 'tool' && message?.tool_call_id === toolCallId) {
+      return message;
+    }
+  }
+  return undefined;
 }
 
 function deferredHitlCallId(label, phase) {
@@ -2215,7 +2312,113 @@ function buildHandoffResponses(graph, parsed) {
   };
 }
 
+/**
+ * Emit an `execute_code` / `file_search` tool call so the run reaches
+ * ON_TOOL_EXECUTE, where `provisionFiles` lazily uploads message attachments to
+ * the code env / vector DB. The tool's own result is irrelevant to the
+ * provisioning assertion (which inspects the fake servers) — we just need the
+ * batch to fire. Guards assert the resource tool was actually advertised.
+ */
+function provisioningToolResponses({ text, toolNames }) {
+  const uploadedFilename = getRequestedSandboxFilename(text, EXEC_UPLOADED_MARKER);
+  if (uploadedFilename) {
+    return codeExecResponses(
+      {
+        filename: uploadedFilename,
+        toolCallId: EXEC_UPLOADED_TOOL_CALL_ID,
+        finalText: EXEC_UPLOADED_FINAL_TEXT,
+        code: `cat "/mnt/data/${uploadedFilename}" && printf 'turn1-proof-%s\\n' "$((40 + 2))" > "/mnt/data/${EXEC_TURN_MARKER_FILE}"`,
+      },
+      toolNames,
+    );
+  }
+
+  const persistedFilename = getRequestedSandboxFilename(text, EXEC_PERSIST_MARKER);
+  if (persistedFilename) {
+    return codeExecResponses(
+      {
+        filename: persistedFilename,
+        toolCallId: EXEC_PERSIST_TOOL_CALL_ID,
+        finalText: EXEC_PERSIST_FINAL_TEXT,
+        code: `printf 'LINES=%s\\n' "$(wc -l < "/mnt/data/${persistedFilename}")" && cat "/mnt/data/${EXEC_TURN_MARKER_FILE}"`,
+      },
+      toolNames,
+    );
+  }
+
+  const codeLabel = getMarkerValue(text, EXECUTE_CODE_MARKER);
+  if (codeLabel) {
+    const codeTool = CODE_EXEC_TOOLS.find((tool) => toolNames.has(tool.name));
+    if (!codeTool) {
+      return {
+        responses: [
+          `E2E execute_code unavailable: no code-execution tool advertised (saw ${
+            JSON.stringify([...toolNames]) || 'none'
+          }).`,
+        ],
+      };
+    }
+    return {
+      responses: ['', `${EXECUTE_CODE_FINAL_TEXT}: ${codeLabel}`],
+      toolCalls: [
+        {
+          id: EXECUTE_CODE_TOOL_CALL_ID,
+          name: codeTool.name,
+          args: codeTool.args,
+          type: 'tool_call',
+        },
+      ],
+    };
+  }
+
+  const searchLabel = getMarkerValue(text, FILE_SEARCH_MARKER);
+  if (searchLabel) {
+    if (!toolNames.has(FILE_SEARCH_TOOL_NAME)) {
+      return {
+        responses: [`E2E file_search unavailable: ${FILE_SEARCH_TOOL_NAME} was not advertised.`],
+      };
+    }
+    return {
+      responses: ['', `${FILE_SEARCH_FINAL_TEXT}: ${searchLabel}`],
+      toolCalls: [
+        {
+          id: FILE_SEARCH_TOOL_CALL_ID,
+          name: FILE_SEARCH_TOOL_NAME,
+          args: { query: `e2e ${searchLabel}` },
+          type: 'tool_call',
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function codeExecResponses({ filename, toolCallId, finalText, code }, toolNames) {
+  if (!toolNames.has(BASH_TOOL_NAME)) {
+    return {
+      responses: [`E2E code exec unavailable: ${BASH_TOOL_NAME} was not advertised.`],
+    };
+  }
+  return {
+    responses: ['', `${finalText}: ${filename}`],
+    toolCalls: [
+      {
+        id: toolCallId,
+        name: BASH_TOOL_NAME,
+        args: { command: code },
+        type: 'tool_call',
+      },
+    ],
+  };
+}
+
 function resolveResponses({ graph, messages, text, toolNames }) {
+  const backgroundCompletion = backgroundCompletionResponses(text);
+  if (backgroundCompletion) {
+    return backgroundCompletion;
+  }
+
   const subagentActivity = subagentActivityResponses(text);
   if (subagentActivity) {
     return subagentActivity;
@@ -2251,9 +2454,19 @@ function resolveResponses({ graph, messages, text, toolNames }) {
     return reply;
   }
 
+  const statefulCodeOperation = getMarkerValue(text, STATEFUL_CODE_MARKER);
+  if (statefulCodeOperation) {
+    return statefulCodeResponses(statefulCodeOperation, toolNames);
+  }
+
   const steerToolLabel = getMarkerValue(text, STEER_TOOL_REPLY_MARKER);
   if (steerToolLabel) {
     return steerToolReplyResponses(steerToolLabel, toolNames);
+  }
+
+  const provisioningTool = provisioningToolResponses({ text, toolNames });
+  if (provisioningTool) {
+    return provisioningTool;
   }
 
   const steerSplitLabel = getMarkerValue(text, STEER_SPLIT_REPLY_MARKER);

@@ -18,6 +18,7 @@ jest.mock('@librechat/data-schemas', () => ({
 const SUB = 'idp-sub-12345';
 
 const ORIGINAL_OPENID_SCOPE = process.env.OPENID_SCOPE;
+const ORIGINAL_OPENID_REFRESH_SCOPE = process.env.OPENID_REFRESH_SCOPE;
 const ORIGINAL_OPENID_REFRESH_AUDIENCE = process.env.OPENID_REFRESH_AUDIENCE;
 const ORIGINAL_OPENID_ISSUER = process.env.OPENID_ISSUER;
 
@@ -61,6 +62,7 @@ function makeDeps(user: IUser | undefined, overrides: Partial<AdminRefreshDeps> 
 describe('buildOpenIDRefreshParams', () => {
   beforeEach(() => {
     delete process.env.OPENID_SCOPE;
+    delete process.env.OPENID_REFRESH_SCOPE;
     delete process.env.OPENID_REFRESH_AUDIENCE;
   });
 
@@ -69,6 +71,12 @@ describe('buildOpenIDRefreshParams', () => {
       delete process.env.OPENID_SCOPE;
     } else {
       process.env.OPENID_SCOPE = ORIGINAL_OPENID_SCOPE;
+    }
+
+    if (ORIGINAL_OPENID_REFRESH_SCOPE === undefined) {
+      delete process.env.OPENID_REFRESH_SCOPE;
+    } else {
+      process.env.OPENID_REFRESH_SCOPE = ORIGINAL_OPENID_REFRESH_SCOPE;
     }
 
     if (ORIGINAL_OPENID_REFRESH_AUDIENCE === undefined) {
@@ -84,14 +92,20 @@ describe('buildOpenIDRefreshParams', () => {
     }
   });
 
-  it('returns scope-only params when OPENID_SCOPE is set', () => {
+  it('omits scope when only OPENID_SCOPE is set', () => {
     process.env.OPENID_SCOPE = 'openid profile email';
+
+    expect(buildOpenIDRefreshParams()).toEqual({});
+  });
+
+  it('returns scope-only params when OPENID_REFRESH_SCOPE is set', () => {
+    process.env.OPENID_REFRESH_SCOPE = 'openid profile email';
 
     expect(buildOpenIDRefreshParams()).toEqual({ scope: 'openid profile email' });
   });
 
   it('returns scope and audience params when both refresh settings are set', () => {
-    process.env.OPENID_SCOPE = 'openid profile email';
+    process.env.OPENID_REFRESH_SCOPE = 'openid profile email';
     process.env.OPENID_REFRESH_AUDIENCE = 'https://api.example.com';
 
     expect(buildOpenIDRefreshParams()).toEqual({
@@ -100,7 +114,7 @@ describe('buildOpenIDRefreshParams', () => {
     });
   });
 
-  it('returns audience-only params when OPENID_SCOPE is unset', () => {
+  it('returns audience-only params when OPENID_REFRESH_SCOPE is unset', () => {
     process.env.OPENID_REFRESH_AUDIENCE = 'https://api.example.com';
 
     expect(buildOpenIDRefreshParams()).toEqual({ audience: 'https://api.example.com' });

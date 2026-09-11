@@ -22,13 +22,8 @@ import type { AgentEventCheckpointMessageOverlay } from '../checkpointer';
 import type { AgentContextFingerprint } from '../compatibility';
 import type { AgentTriggerExpectedAction } from './envelope';
 import type { AgentEventAppliedAction } from './types';
-import {
-  captureAgentEventCheckpoint,
-  deleteAgentCheckpoint,
-  forkAgentEventCheckpoint,
-  getAgentCheckpointer,
-  getApprovalTtlMs,
-} from '../checkpointer';
+import { getAgentCheckpointer, getApprovalTtlMs } from '../checkpointer';
+import { createOwnedActorCheckpoints } from '../checkpoints/actor';
 import { agentContextFingerprintsMatch } from '../compatibility';
 
 interface EventActorResult extends Record<string, EventActorEvent> {
@@ -78,6 +73,7 @@ export interface AgentEventActorContext {
   discoveredToolNames?: string[];
   summary?: IAgentEventActorState['summary'];
   contextMeta?: IAgentEventActorState['contextMeta'];
+  compactionSemanticIndex?: IAgentEventActorState['compactionSemanticIndex'];
   checkpointMessageOverlay?: AgentEventCheckpointMessageOverlay;
 }
 
@@ -231,6 +227,7 @@ export async function executeAgentEventActor<T>(
   input: ExecuteAgentEventActorInput<T>,
   deps: AgentEventActorDependencies,
 ): Promise<ExecuteAgentEventActorResult<T>> {
+  const checkpoints = createOwnedActorCheckpoints(input.user, input.tenantId);
   let value: T | undefined;
   let invocationError: unknown;
   let ownedActionAdmissionId: string | undefined;
@@ -254,11 +251,14 @@ export async function executeAgentEventActor<T>(
       if (context.signal.aborted) {
         throw context.signal.reason;
       }
-      const snapshot = await deps.getSnapshot({
-        user: input.user,
-        conversationId: input.conversationId,
-        ...(input.tenantId == null ? {} : { tenantId: input.tenantId }),
-      });
+      const [snapshot] = await Promise.all([
+        deps.getSnapshot({
+          user: input.user,
+          conversationId: input.conversationId,
+          ...(input.tenantId == null ? {} : { tenantId: input.tenantId }),
+        }),
+        checkpoints.drain(input.conversationId, input.checkpointer),
+      ]);
       if (snapshot === undefined) {
         throw new Error('Event actor binding is no longer active');
       }
@@ -391,7 +391,7 @@ export async function executeAgentEventActor<T>(
           return { status: 'checkpoint_unavailable', head };
         }
       }
-      const fork = await forkAgentEventCheckpoint(
+      const fork = await checkpoints.fork(
         state.checkpoint,
         request.checkpointNs,
         request.invocationId,
@@ -548,7 +548,7 @@ export async function executeAgentEventActor<T>(
       pendingSuspension = input.readSuspension?.();
       if (pendingSuspension != null) {
         actionAppliedBeforePause = input.readAppliedAction() != null;
-        const checkpoint = await captureAgentEventCheckpoint(
+        const checkpoint = await checkpoints.capture(
           input.conversationId,
           invocation.fork.checkpointNs,
           invocation.invocationId,
@@ -586,9 +586,9 @@ export async function executeAgentEventActor<T>(
           checkpoint: invocation.fork,
         };
       }
-      let checkpoint: Awaited<ReturnType<typeof captureAgentEventCheckpoint>>;
+      let checkpoint: Awaited<ReturnType<typeof checkpoints.capture>>;
       try {
-        checkpoint = await captureAgentEventCheckpoint(
+        checkpoint = await checkpoints.capture(
           input.conversationId,
           invocation.fork.checkpointNs,
           invocation.invocationId,
@@ -666,6 +666,9 @@ export async function executeAgentEventActor<T>(
           ? undefined
           : {
               generation: request.expectedHead.generation,
+              ...(observedState.previousCheckpoint == null
+                ? {}
+                : { previousCheckpoint: observedState.previousCheckpoint }),
               checkpoint: {
                 threadId: expectedHeadCheckpoint!.threadId,
                 checkpointId: expectedCheckpointId!,
@@ -685,6 +688,9 @@ export async function executeAgentEventActor<T>(
               ...(observedState.contextMeta == null
                 ? {}
                 : { contextMeta: observedState.contextMeta }),
+              ...(observedState.compactionSemanticIndex == null
+                ? {}
+                : { compactionSemanticIndex: observedState.compactionSemanticIndex }),
             };
       const committed = await deps.commitState({
         user: input.user,
@@ -712,6 +718,9 @@ export async function executeAgentEventActor<T>(
               ...(resultContext.contextMeta == null
                 ? {}
                 : { contextMeta: resultContext.contextMeta }),
+              ...(resultContext.compactionSemanticIndex == null
+                ? {}
+                : { compactionSemanticIndex: resultContext.compactionSemanticIndex }),
             }),
       });
       if (committed.status === 'stale') {
@@ -726,15 +735,8 @@ export async function executeAgentEventActor<T>(
         };
       }
       if (committed.prunableCheckpoint != null) {
-        await deleteAgentCheckpoint(
-          committed.prunableCheckpoint.threadId,
-          input.checkpointer,
-          undefined,
-          {
-            throwOnError: true,
-            checkpointNamespace: committed.prunableCheckpoint.checkpointNs,
-          },
-        );
+        await checkpoints.remove(committed.prunableCheckpoint, input.checkpointer);
+        await checkpoints.acknowledgePruning(committed.prunableCheckpoint);
       }
       return { status: 'committed', head: toHead(input.conversationId, committed.state) };
     },
@@ -766,10 +768,7 @@ export async function executeAgentEventActor<T>(
         }
         ownedActionAdmissionId = undefined;
       }
-      await deleteAgentCheckpoint(request.invocation.fork.threadId, input.checkpointer, undefined, {
-        throwOnError: true,
-        checkpointNamespace: request.invocation.fork.checkpointNs,
-      });
+      await checkpoints.removeOwned(request.invocation.fork, input.checkpointer);
       const released = await deps.resolveReconciliation({
         user: input.user,
         conversationId: input.conversationId,
@@ -907,6 +906,8 @@ export async function resumeAgentEventActor<T>(
   input: ResumeAgentEventActorInput<T>,
   deps: AgentEventActorDependencies,
 ): Promise<ExecuteAgentEventActorResult<T>> {
+  const checkpoints = createOwnedActorCheckpoints(input.user, input.tenantId);
+  let checkpointStorageNamespace: string | null = null;
   let value: T | undefined;
   let invocationError: unknown;
   let observedState: IAgentEventActorState | null | undefined;
@@ -943,7 +944,10 @@ export async function resumeAgentEventActor<T>(
       if (deps.claimSuspension == null) {
         throw new Error('Event actor suspension claim storage is unavailable');
       }
-      const snapshot = await deps.getSnapshot(owner);
+      const [snapshot] = await Promise.all([
+        deps.getSnapshot(owner),
+        checkpoints.drain(input.conversationId, input.checkpointer),
+      ]);
       const hostSuspension = snapshot?.suspension;
       if (
         snapshot == null ||
@@ -983,8 +987,14 @@ export async function resumeAgentEventActor<T>(
         throw new Error('Event actor suspension claim could not be projected to its job');
       }
       try {
+        checkpointStorageNamespace =
+          (await checkpoints.resolveNamespace(request.suspension.checkpoint, input.checkpointer)) ??
+          null;
+        if (checkpointStorageNamespace == null) {
+          throw new Error('Signed event actor checkpoint is no longer available');
+        }
         value = await input.resume({
-          checkpointNamespace: request.suspension.checkpoint.checkpointNs,
+          checkpointNamespace: checkpointStorageNamespace,
           ...(request.suspension.checkpoint.checkpointId == null
             ? {}
             : { checkpointId: request.suspension.checkpoint.checkpointId }),
@@ -1010,11 +1020,13 @@ export async function resumeAgentEventActor<T>(
             hostSuspension.handlingGenerationCreatedAt ?? hostSuspension.jobCreatedAt,
         };
         actionAppliedBeforePause = observedAction != null;
-        const checkpoint = await captureAgentEventCheckpoint(
+        const checkpoint = await checkpoints.capture(
           input.conversationId,
           request.suspension.checkpoint.checkpointNs,
           request.suspension.invocation.invocationId,
           input.checkpointer,
+          checkpointStorageNamespace,
+          request.suspension.checkpoint.checkpointId,
         );
         if (checkpoint?.checkpointId == null) {
           throw new Error('Re-paused event actor has no observable interrupt checkpoint');
@@ -1055,13 +1067,15 @@ export async function resumeAgentEventActor<T>(
           },
         };
       }
-      let checkpoint: Awaited<ReturnType<typeof captureAgentEventCheckpoint>>;
+      let checkpoint: Awaited<ReturnType<typeof checkpoints.capture>>;
       try {
-        checkpoint = await captureAgentEventCheckpoint(
+        checkpoint = await checkpoints.capture(
           input.conversationId,
           request.suspension.checkpoint.checkpointNs,
           request.suspension.invocation.invocationId,
           input.checkpointer,
+          checkpointStorageNamespace,
+          request.suspension.checkpoint.checkpointId,
         );
       } catch (error) {
         return {
@@ -1131,15 +1145,7 @@ export async function resumeAgentEventActor<T>(
       if (settled.status !== 'settled') {
         return settled;
       }
-      await deleteAgentCheckpoint(
-        input.suspension.checkpoint.threadId,
-        input.checkpointer,
-        undefined,
-        {
-          throwOnError: true,
-          checkpointNamespace: input.suspension.checkpoint.checkpointNs,
-        },
-      );
+      await checkpoints.remove(input.suspension.checkpoint, input.checkpointer);
       return settled;
     },
     async commit(request) {
@@ -1158,6 +1164,9 @@ export async function resumeAgentEventActor<T>(
           ? undefined
           : {
               generation: observedState.generation,
+              ...(observedState.previousCheckpoint == null
+                ? {}
+                : { previousCheckpoint: observedState.previousCheckpoint }),
               checkpoint: observedState.checkpoint,
               ...(observedState.contextFingerprint == null
                 ? {}
@@ -1172,6 +1181,9 @@ export async function resumeAgentEventActor<T>(
               ...(observedState.contextMeta == null
                 ? {}
                 : { contextMeta: observedState.contextMeta }),
+              ...(observedState.compactionSemanticIndex == null
+                ? {}
+                : { compactionSemanticIndex: observedState.compactionSemanticIndex }),
               ...(observedState.requiresColdStart === true ? { requiresColdStart: true } : {}),
             };
       const committed = await deps.commitState({
@@ -1196,6 +1208,9 @@ export async function resumeAgentEventActor<T>(
               ...(resultContext.contextMeta == null
                 ? {}
                 : { contextMeta: resultContext.contextMeta }),
+              ...(resultContext.compactionSemanticIndex == null
+                ? {}
+                : { compactionSemanticIndex: resultContext.compactionSemanticIndex }),
             }),
       });
       if (committed.status === 'stale') {
@@ -1207,15 +1222,8 @@ export async function resumeAgentEventActor<T>(
         };
       }
       if (committed.prunableCheckpoint != null) {
-        await deleteAgentCheckpoint(
-          committed.prunableCheckpoint.threadId,
-          input.checkpointer,
-          undefined,
-          {
-            throwOnError: true,
-            checkpointNamespace: committed.prunableCheckpoint.checkpointNs,
-          },
-        );
+        await checkpoints.remove(committed.prunableCheckpoint, input.checkpointer);
+        await checkpoints.acknowledgePruning(committed.prunableCheckpoint);
       }
       return { status: 'committed', head: toHead(input.conversationId, committed.state) };
     },
@@ -1306,6 +1314,7 @@ export async function cancelAgentEventActor(
   input: CancelAgentEventActorInput,
   deps: Pick<AgentEventActorDependencies, 'cancelSuspension'>,
 ): Promise<EventActorCancelSuspensionResult> {
+  const checkpoints = createOwnedActorCheckpoints(input.user, input.tenantId);
   if (deps.cancelSuspension == null) {
     throw new Error('Event actor suspension cancellation storage is unavailable');
   }
@@ -1335,15 +1344,7 @@ export async function cancelAgentEventActor(
       if (cancelled.status !== 'cancelled') {
         return cancelled;
       }
-      await deleteAgentCheckpoint(
-        request.suspension.checkpoint.threadId,
-        input.checkpointer,
-        undefined,
-        {
-          throwOnError: true,
-          checkpointNamespace: request.suspension.checkpoint.checkpointNs,
-        },
-      );
+      await checkpoints.remove(request.suspension.checkpoint, input.checkpointer);
       return cancelled;
     },
     async commit() {

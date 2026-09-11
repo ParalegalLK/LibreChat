@@ -11,6 +11,7 @@ import {
 } from './cache/ServerConfigsCacheFactory';
 import { MCPInspectionFailedError, isMCPDomainNotAllowedError } from '~/mcp/errors';
 import { ReadThroughAllCache } from './cache/ReadThroughAllCache';
+import { canBackfillSharedServerInstructions } from '~/mcp/utils';
 import { isPluginSourced, MCP_PLUGIN_SOURCE } from '~/utils/env';
 import { ReadThroughCache } from './cache/ReadThroughCache';
 import { MCPServerInspector } from './MCPServerInspector';
@@ -20,6 +21,10 @@ import { withTimeout } from '~/utils';
 
 /** How long a failure stub is considered fresh before re-attempting inspection (5 minutes). */
 const CONFIG_STUB_RETRY_MS = 5 * 60 * 1000;
+
+/** A request stopped while its config initialization was still queued. Healthy
+ * joiners retry ownership instead of inheriting that request-local cancellation. */
+export class MCPConfigInitializationCanceledError extends Error {}
 
 /** Cached configs carry decrypted oauth/apiKey credentials, so the shared
  *  stores only ever see ciphertext; plaintext stays in process memory,
@@ -106,6 +111,7 @@ const ADMIN_CONFIGURABLE_FIELDS = [
   'apiKey',
   'oauth',
   'oauth_headers',
+  'obo',
   'title',
   'description',
   'iconPath',
@@ -141,6 +147,23 @@ function deepEqual(a: unknown, b: unknown): boolean {
     if (!deepEqual(aObj[key], bObj[key])) return false;
   }
   return true;
+}
+
+/**
+ * True when `candidate` matches `yamlEntry` on every admin-configurable field.
+ * Field-wise comparison rather than whole-object equality: inspector-derived
+ * fields (`tools`, `updatedAt`, `resolvedInstructions`, ...) may legitimately
+ * differ between a stored entry and the effective config a connection used.
+ */
+function matchesAdminConfigurableFields(
+  yamlEntry: t.ParsedServerConfig,
+  candidate: t.ParsedServerConfig,
+): boolean {
+  const yamlRecord = yamlEntry as unknown as Record<string, unknown>;
+  const candidateRecord = candidate as unknown as Record<string, unknown>;
+  return ADMIN_CONFIGURABLE_FIELDS.every((field) =>
+    deepEqual(yamlRecord[field], candidateRecord[field]),
+  );
 }
 
 const CONFIG_SERVER_INIT_TIMEOUT_MS = (() => {
@@ -441,7 +464,9 @@ export class MCPServersRegistry {
     /** Tenant-scoped (also covering the single-flight map): the DB read behind
      *  a miss is filtered by the active tenant, so entries and in-flight
      *  builds must partition the same way. */
-    const cacheKey = scopedCacheKey(userId ?? '__no_user__');
+    // DB visibility depends on both user and role. Keep the role in the cache and
+    // single-flight identity so a role change cannot reuse the previous ACL result.
+    const cacheKey = scopedCacheKey(`${userId ?? '__no_user__'}::role:${role ?? '__no_role__'}`);
 
     const cached = await this.readThroughCacheAll.get(cacheKey);
     if (cached.hit) {
@@ -557,6 +582,73 @@ export class MCPServersRegistry {
       this.resetYamlServerNamesMemo();
     }
     return result;
+  }
+
+  /**
+   * Backfills the inspector-derived `resolvedInstructions` for a server whose
+   * operator explicitly deferred startup inspection. An enabled
+   * `serverInstructions` declaration has no fetched text to resolve in that
+   * case. Identity- or request-scoped servers are deliberately rejected:
+   * their live instructions cannot safely be stored in a shared config.
+   *
+   * First write wins: once the stored entry carries any text, later calls are
+   * no-ops. Without this, identities racing the first backfill under stale
+   * config snapshots would churn the shared copy and rotate the global read
+   * caches on every divergence.
+   *
+   * YAML-tier servers only. Config-overlay servers are cached under
+   * config-hash keys and cannot be addressed by name here; DB-backed user
+   * servers need an identity-preserving write through mongoose timestamps and
+   * the credential-sanitization pipeline, which is its own change. Both are
+   * left untouched. An overlaid effective config carries its base's `'yaml'`
+   * source tag (`overlaySource`), so `connectedConfig` — the config the
+   * delivering connection was actually created from — is compared against the
+   * stored entry on every admin-configurable field: text fetched from an
+   * overridden endpoint must never be stored as the shared base's.
+   *
+   * The entry's `updatedAt` is deliberately preserved (the storage `patch`
+   * contract): the config identity did not change, and bumping it would mark
+   * every live connection for this server stale.
+   *
+   * @returns true when a stored config was updated.
+   */
+  public async setResolvedInstructions(
+    serverName: string,
+    instructions: string,
+    userId?: string,
+    connectedConfig?: t.ParsedServerConfig,
+  ): Promise<boolean> {
+    if (!this.cacheConfigsRepo.patch) {
+      return false;
+    }
+    const yamlEntry = await this.cacheConfigsRepo.get(serverName);
+    if (
+      !yamlEntry ||
+      yamlEntry.resolvedInstructions != null ||
+      !canBackfillSharedServerInstructions(yamlEntry)
+    ) {
+      return false;
+    }
+    if (connectedConfig && !matchesAdminConfigurableFields(yamlEntry, connectedConfig)) {
+      logger.debug(
+        `[MCPServersRegistry][${serverName}] Connection config differs from the stored YAML entry (config-tier override or stale snapshot); not storing its instructions`,
+      );
+      return false;
+    }
+    /** The identity comparison above ran against a snapshot that can lag by the
+     *  registry cache TTL; passing the validated entry's `updatedAt` makes the
+     *  store-side patch a compare-and-set, so instructions never land on an
+     *  entry another replica replaced in between. */
+    const patched = await this.cacheConfigsRepo.patch(
+      serverName,
+      { resolvedInstructions: instructions },
+      yamlEntry.updatedAt,
+    );
+    if (!patched) {
+      return false;
+    }
+    await this.invalidateServerReadCaches(serverName, userId, 'CACHE');
+    return true;
   }
 
   /**
@@ -691,6 +783,7 @@ export class MCPServersRegistry {
    */
   public async ensureConfigServers(
     resolvedMcpConfig: Record<string, t.MCPOptions>,
+    limit: <T>(task: () => Promise<T>) => Promise<T> = (task) => task(),
   ): Promise<Record<string, t.ParsedServerConfig>> {
     if (!resolvedMcpConfig || Object.keys(resolvedMcpConfig).length === 0) {
       return {};
@@ -712,7 +805,12 @@ export class MCPServersRegistry {
         if (this.isUnmodifiedYamlServer(yamlSnapshot, serverName, rawConfig)) {
           return;
         }
-        const parsed = await this.ensureSingleConfigServer(serverName, rawConfig, allowlists);
+        const parsed = await this.ensureSingleConfigServer(
+          serverName,
+          rawConfig,
+          allowlists,
+          limit,
+        );
         if (parsed) {
           result[serverName] = parsed;
         }
@@ -762,6 +860,7 @@ export class MCPServersRegistry {
     serverName: string,
     rawConfig: t.MCPOptions,
     allowlists: ResolvedMCPAllowlists,
+    limit: <T>(task: () => Promise<T>) => Promise<T>,
   ): Promise<t.ParsedServerConfig | undefined> {
     const cacheKey = this.configCacheKey(serverName, rawConfig, allowlists);
 
@@ -777,10 +876,22 @@ export class MCPServersRegistry {
 
     const pending = this.pendingConfigInits.get(cacheKey);
     if (pending) {
-      return pending;
+      try {
+        return await pending;
+      } catch (error) {
+        if (error instanceof MCPConfigInitializationCanceledError) {
+          return this.ensureSingleConfigServer(serverName, rawConfig, allowlists, limit);
+        }
+        throw error;
+      }
     }
 
-    const initPromise = this.lazyInitConfigServer(cacheKey, serverName, rawConfig, allowlists);
+    // Only the caller that owns the cold initialization consumes shared capacity.
+    // Joiners await the single-flight promise directly instead of filling every
+    // slot while the same inspection runs once.
+    const initPromise = limit(() =>
+      this.lazyInitConfigServer(cacheKey, serverName, rawConfig, allowlists),
+    );
     this.pendingConfigInits.set(cacheKey, initPromise);
 
     try {

@@ -11,7 +11,14 @@ const {
   flattenArtifactPath,
   createAxiosInstance,
   getCodeApiAuthHeaders,
+  getCodeApiUploadOptions,
+  withCodeApiRateLimit,
+  withCodeApiUploadRecovery,
   classifyCodeArtifact,
+  isMissingSandboxPathError,
+  parseSandboxImageChunk,
+  readWindowedSandboxImage,
+  createCodeApiRateLimitBudget,
   codeServerHttpAgent,
   codeServerHttpsAgent,
   extractCodeArtifactText,
@@ -22,7 +29,16 @@ const {
   getStorageMetadata,
   getCodeExecutionBaseUrl,
   buildCodeEnvDownloadQuery,
-  CODE_API_EXPECTED_PROFILE_HEADER,
+  codeExecutionHeaders,
+  executeWorkspaceTool,
+  selectCodeFiles,
+  getCodeFileInfo,
+  getUploadedCodeEnvFilename,
+  checkCodeFileActive: checkIfActive,
+  CODE_OUTPUT_PREFLIGHT_MAX_BYTES,
+  CODE_OUTPUT_PREFLIGHT_MAX_COUNT,
+  normalizeArtifactDeliveryFailure,
+  resolveDownloadPath,
 } = require('@librechat/api');
 const {
   Tools,
@@ -36,9 +52,7 @@ const {
   EModelEndpoint,
   ErrorTypes,
   mergeFileConfig,
-  getCodeEnvRefs,
   mergeCodeEnvRef,
-  getCodeEnvRefForProfile,
   getEndpointFileConfig,
 } = require('librechat-data-provider');
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
@@ -49,6 +63,136 @@ const { getRetentionExpiry } = require('~/server/services/Files/retention');
 const { determineFileType } = require('~/server/utils');
 
 const axios = createAxiosInstance();
+
+/** Request-scoped references to buffers already fetched by artifact preflight.
+ * The request object is the ownership boundary, and WeakMap keeps completed
+ * requests from retaining generated-file bytes. */
+const preparedCodeOutputBuffers = new WeakMap();
+
+const codeOutputBufferKey = (routeKey, sessionId, fileId) => `${routeKey}\0${sessionId}\0${fileId}`;
+
+const getCodeOutputRouteKey = ({ executionRouteKey, codeApiBaseUrl, executionProfile }) =>
+  executionRouteKey ?? codeApiBaseUrl ?? executionProfile ?? 'default';
+
+const normalizeSandboxArtifactName = (filePath) => {
+  if (typeof filePath !== 'string' || filePath.length === 0) {
+    return null;
+  }
+  if (filePath.includes('\\')) {
+    return null;
+  }
+  const posixPath = filePath;
+  let relativePath = posixPath;
+  if (posixPath.startsWith('/mnt/data/')) {
+    relativePath = posixPath.slice('/mnt/data/'.length);
+  } else if (posixPath.startsWith('/')) {
+    return null;
+  }
+  if (relativePath.split('/').some((segment) => segment === '.' || segment === '..')) {
+    return null;
+  }
+  const normalized = path.posix.normalize(relativePath).replace(/^\.\//, '');
+  if (
+    normalized.length === 0 ||
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('../')
+  ) {
+    return null;
+  }
+  return normalized;
+};
+
+const cachePreparedCodeOutputBuffer = ({
+  req,
+  id,
+  name,
+  session_id,
+  buffer,
+  codeApiBaseUrl,
+  executionProfile,
+  executionRouteKey,
+}) => {
+  if (
+    !req ||
+    (typeof req !== 'object' && typeof req !== 'function') ||
+    typeof id !== 'string' ||
+    typeof session_id !== 'string' ||
+    !Buffer.isBuffer(buffer)
+  ) {
+    return;
+  }
+  let cache = preparedCodeOutputBuffers.get(req);
+  if (!cache) {
+    cache = { buffers: new Map(), totalBytes: 0 };
+    preparedCodeOutputBuffers.set(req, cache);
+  }
+  const routeKey = getCodeOutputRouteKey({ executionRouteKey, codeApiBaseUrl, executionProfile });
+  const key = codeOutputBufferKey(routeKey, session_id, id);
+  const existing = cache.buffers.get(key);
+  if (existing) {
+    cache.totalBytes -= existing.buffer.length;
+    cache.buffers.delete(key);
+  }
+  if (buffer.length > CODE_OUTPUT_PREFLIGHT_MAX_BYTES) {
+    return;
+  }
+  while (
+    cache.buffers.size >= CODE_OUTPUT_PREFLIGHT_MAX_COUNT ||
+    cache.totalBytes + buffer.length > CODE_OUTPUT_PREFLIGHT_MAX_BYTES
+  ) {
+    const oldestKey = cache.buffers.keys().next().value;
+    if (oldestKey == null) {
+      break;
+    }
+    const oldest = cache.buffers.get(oldestKey);
+    cache.buffers.delete(oldestKey);
+    cache.totalBytes -= oldest.buffer.length;
+  }
+  cache.buffers.set(key, { name, buffer });
+  cache.totalBytes += buffer.length;
+};
+
+const getPreparedCodeOutputBuffer = ({
+  req,
+  file_path,
+  session_id,
+  files,
+  codeApiBaseUrl,
+  executionProfile,
+  executionRouteKey,
+}) => {
+  if (!req || (typeof req !== 'object' && typeof req !== 'function') || !Array.isArray(files)) {
+    return null;
+  }
+  const cache = preparedCodeOutputBuffers.get(req);
+  const requestedName = normalizeSandboxArtifactName(file_path);
+  if (!cache || !requestedName) {
+    return null;
+  }
+
+  const routeKey = getCodeOutputRouteKey({ executionRouteKey, codeApiBaseUrl, executionProfile });
+  for (const file of files) {
+    if (!file || typeof file.id !== 'string' || typeof file.name !== 'string') {
+      continue;
+    }
+    if (normalizeSandboxArtifactName(file.name) !== requestedName) {
+      continue;
+    }
+    const storageSessionId = file.storage_session_id ?? file.session_id ?? session_id;
+    if (typeof storageSessionId !== 'string') {
+      continue;
+    }
+    const key = codeOutputBufferKey(routeKey, storageSessionId, file.id);
+    const cached = cache.buffers.get(key);
+    if (cached && normalizeSandboxArtifactName(cached.name) === requestedName) {
+      cache.buffers.delete(key);
+      cache.totalBytes -= cached.buffer.length;
+      return cached.buffer;
+    }
+  }
+  return null;
+};
 
 class CodeOutputDownloadLimitError extends Error {
   constructor(maxBytes) {
@@ -79,9 +223,10 @@ const downloadCodeOutputBuffer = async ({
   maxBytes,
   codeApiBaseUrl,
   executionProfile = 'default',
+  bridgeWorkerId,
 }) => {
   const baseURL = codeApiBaseUrl ?? getCodeExecutionBaseUrl(executionProfile);
-  const authHeaders = await getCodeApiAuthHeaders(req);
+  const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
   const downloadQuery = buildCodeEnvDownloadQuery({ kind: 'user', id: req.user.id });
   let response;
   try {
@@ -92,7 +237,7 @@ const downloadCodeOutputBuffer = async ({
       headers: {
         'User-Agent': 'LibreChat/1.0',
         ...authHeaders,
-        [CODE_API_EXPECTED_PROFILE_HEADER]: executionProfile,
+        ...codeExecutionHeaders({ executionProfile, bridgeWorkerId }),
       },
       httpAgent: codeServerHttpAgent,
       httpsAgent: codeServerHttpsAgent,
@@ -133,6 +278,8 @@ const downloadCodeOutputBuffer = async ({
  * @param {number} [params.maxBytes] - Remaining aggregate inspection budget.
  * @param {string} [params.codeApiBaseUrl] - Trusted per-agent Code API endpoint.
  * @param {'default'|'stateful'} [params.executionProfile] - Trusted execution profile.
+ * @param {string} [params.bridgeWorkerId] - Trusted worker selected for this execution.
+ * @param {string} [params.executionRouteKey] - Trusted deployment-local route identity.
  */
 const prepareCodeOutputForInspection = async ({
   req,
@@ -143,6 +290,8 @@ const prepareCodeOutputForInspection = async ({
   inspectContent = true,
   codeApiBaseUrl,
   executionProfile = 'default',
+  bridgeWorkerId,
+  executionRouteKey,
 }) => {
   const { fileSizeLimit } = getCodeOutputFileSettings(req);
   const transportLimit =
@@ -154,6 +303,17 @@ const prepareCodeOutputForInspection = async ({
     maxBytes: transportLimit,
     codeApiBaseUrl,
     executionProfile,
+    bridgeWorkerId,
+  });
+  cachePreparedCodeOutputBuffer({
+    req,
+    id,
+    name,
+    session_id,
+    buffer,
+    codeApiBaseUrl,
+    executionProfile,
+    executionRouteKey,
   });
   const safeName = sanitizeArtifactPath(name);
   const fallbackType = inferMimeType(name, '') || 'application/octet-stream';
@@ -229,6 +389,7 @@ const prepareCodeOutputForInspection = async ({
  * @param {string} params.messageId - The current message ID.
  * @param {number} params.expiresAt - Expiration timestamp (24 hours from creation).
  * @param {'default'|'stateful'} [params.executionProfile] - Code API route for later fallback download.
+ * @param {string} [params.executionRouteKey] - Deployment-local route identity.
  * @returns {Object} Fallback response with download URL.
  */
 const createDownloadFallback = ({
@@ -241,12 +402,20 @@ const createDownloadFallback = ({
   toolCallId,
   conversationId,
   executionProfile,
+  executionRouteKey,
 }) => {
   const basePath = getBasePath();
-  const profileQuery = executionProfile === 'stateful' ? '?execution_profile=stateful' : '';
+  const query = new URLSearchParams();
+  if (executionProfile === 'stateful') {
+    query.set('execution_profile', 'stateful');
+  }
+  if (executionRouteKey && executionRouteKey !== executionProfile) {
+    query.set('execution_route_key', executionRouteKey);
+  }
+  const routeQuery = query.size > 0 ? `?${query.toString()}` : '';
   return {
     filename: name,
-    filepath: `${basePath}/api/files/code/download/${session_id}/${id}${profileQuery}`,
+    filepath: `${basePath}/api/files/code/download/${session_id}/${id}${routeQuery}`,
     expiresAt,
     conversationId,
     toolCallId,
@@ -494,6 +663,8 @@ const runPreviewFinalize = ({ finalize, fileId, previewRevision, onResolved }) =
  * @param {string} params.messageId - The current message ID.
  * @param {string} [params.codeApiBaseUrl] - Trusted per-agent Code API endpoint.
  * @param {'default'|'stateful'} [params.executionProfile] - Trusted execution profile.
+ * @param {string} [params.executionRouteKey] - Trusted deployment-local route identity.
+ * @param {string} [params.bridgeWorkerId] - Trusted bridge worker selected for this execution.
  * @param {Buffer} [params.preparedBuffer] - Bytes downloaded during a
  *   no-write content inspection preflight.
  * @param {boolean} [params.downloadFallback] - Return the bounded download
@@ -512,6 +683,8 @@ const processCodeOutput = async ({
   freshClaimAfter,
   codeApiBaseUrl,
   executionProfile = 'default',
+  executionRouteKey = executionProfile,
+  bridgeWorkerId,
   preparedBuffer,
   downloadFallback,
 }) => {
@@ -535,10 +708,12 @@ const processCodeOutput = async ({
           session_id,
           conversationId,
           executionProfile,
+          executionRouteKey,
           expiresAt: currentDate.getTime() + 86400000,
         }),
       };
     }
+    const retentionExpiryPromise = getRetentionExpiry(req);
     const buffer =
       preparedBuffer ??
       (await downloadCodeOutputBuffer({
@@ -548,6 +723,7 @@ const processCodeOutput = async ({
         maxBytes: fileSizeLimit,
         codeApiBaseUrl,
         executionProfile,
+        bridgeWorkerId,
       }));
 
     // Enforce file size limit
@@ -565,6 +741,7 @@ const processCodeOutput = async ({
           session_id,
           conversationId,
           executionProfile,
+          executionRouteKey,
           expiresAt: currentDate.getTime() + 86400000,
         }),
       };
@@ -579,6 +756,7 @@ const processCodeOutput = async ({
       storage_session_id: session_id,
       file_id: id,
       executionProfile,
+      ...(executionRouteKey !== executionProfile ? { executionRouteKey } : {}),
     };
 
     /* `safeName` keeps the directory structure (`a/b/file.txt` -> `a/b/file.txt`)
@@ -729,7 +907,7 @@ const processCodeOutput = async ({
         source: appConfig.fileStrategy,
         context: FileContext.execute_code,
         metadata: codeEnvMetadata,
-        ...(await getRetentionExpiry(req)),
+        ...(await retentionExpiryPromise),
       };
       if (!(await commitCodeFile(file))) {
         return null;
@@ -752,6 +930,7 @@ const processCodeOutput = async ({
           session_id,
           conversationId,
           executionProfile,
+          executionRouteKey,
           expiresAt: currentDate.getTime() + 86400000,
         }),
       };
@@ -836,7 +1015,7 @@ const processCodeOutput = async ({
       context: FileContext.execute_code,
       usage: isUpdate ? (claimed.usage ?? 0) + 1 : 1,
       createdAt: isUpdate ? claimed.createdAt : formattedDate,
-      ...(await getRetentionExpiry(req)),
+      ...(await retentionExpiryPromise),
     };
 
     if (expectsPreview) {
@@ -935,69 +1114,27 @@ const processCodeOutput = async ({
         session_id,
         conversationId,
         executionProfile,
+        executionRouteKey,
         expiresAt: currentDate.getTime() + 86400000,
       }),
     };
   }
 };
 
-function checkIfActive(dateString) {
-  const givenDate = new Date(dateString);
-  const currentDate = new Date();
-  const timeDifference = currentDate - givenDate;
-  const hoursPassed = timeDifference / (1000 * 60 * 60);
-  return hoursPassed < 23;
+function getSessionFileInfo(ref, req, route = {}, signal) {
+  return getCodeFileInfo({
+    ref,
+    req,
+    route,
+    signal,
+    request: axios,
+    getBaseURL: getCodeBaseURL,
+    getAuthHeaders: getCodeApiAuthHeaders,
+  });
 }
 
-/**
- * Retrieves the `lastModified` time string for a specified file from Code Execution Server.
- *
- * @param {import('librechat-data-provider').CodeEnvRef} ref - Typed pointer
- *   into codeapi storage. Carries kind/id/storage_session_id/file_id;
- *   codeapi resolves the sessionKey from the request's auth context.
- * @param {ServerRequest} [req] - Current authenticated request, used to mint Code API auth.
- * @param {{baseUrl?: string, executionProfile?: 'default'|'stateful'}} [route]
- *   Trusted host-selected Code API route.
- *
- * @returns {Promise<string|null>}
- *          A promise that resolves to the `lastModified` time string of the file if successful, or null if there is an
- *          error in initialization or fetching the info.
- */
-async function getSessionInfo(ref, req, route = {}) {
-  try {
-    const baseURL = route.baseUrl ?? getCodeBaseURL();
-    const authHeaders = await getCodeApiAuthHeaders(req);
-    /* `/sessions/.../objects/...` is gated by codeapi's `sessionAuth`
-     * middleware (post-Phase C). The middleware reconstructs the
-     * sessionKey from the URL query (`kind`/`id`/`version?`) plus the
-     * requester's auth context, then matches it against the cached
-     * sessionKey on the storage bucket. We have the full `codeEnvRef`
-     * here, so pass kind+id (+version when skill) directly. */
-    const query = buildCodeEnvDownloadQuery({
-      kind: ref.kind,
-      id: ref.id,
-      ...(ref.kind === 'skill' ? { version: ref.version } : {}),
-    });
-    const response = await axios({
-      method: 'get',
-      url: `${baseURL}/sessions/${ref.storage_session_id}/objects/${ref.file_id}${query}`,
-      headers: {
-        'User-Agent': 'LibreChat/1.0',
-        ...authHeaders,
-        ...(route.executionProfile
-          ? { [CODE_API_EXPECTED_PROFILE_HEADER]: route.executionProfile }
-          : {}),
-      },
-      httpAgent: codeServerHttpAgent,
-      httpsAgent: codeServerHttpsAgent,
-      timeout: 5000,
-    });
-
-    return response.data?.lastModified;
-  } catch (_error) {
-    logger.debug('[getSessionInfo] session lookup failed (treating as cache miss)');
-    return null;
-  }
+async function getSessionInfo(ref, req, route = {}, signal) {
+  return (await getSessionFileInfo(ref, req, route, signal))?.lastModified ?? null;
 }
 
 const getPreviewContextSuffix = (file) => {
@@ -1014,13 +1151,26 @@ const getPreviewContextSuffix = (file) => {
     : ' (preview unavailable)';
 };
 
-const getVisibleCodeFileContextLine = (file, agentResourceIds) => {
-  if (file.context === FileContext.execute_code) {
+/**
+ * A generated output is normally left out — the model already knows what it
+ * wrote. That only holds while the file is still where it wrote it: once a
+ * newer same-named file takes the bare path, the output mounts under a
+ * suffixed name the model has never seen, and silence would leave it reading
+ * the newcomer or failing to find its own artifact.
+ */
+const getVisibleCodeFileContextLine = (file, agentResourceIds, destination) => {
+  const displaced = destination !== file.filename;
+  if (file.context === FileContext.execute_code && !displaced) {
     return '';
   }
 
-  const fileSuffix = agentResourceIds.has(file.file_id) ? '' : ' (attached by user)';
-  return `\n\t- /mnt/data/${file.filename}${fileSuffix}${getPreviewContextSuffix(file)}`;
+  const origin =
+    file.context === FileContext.execute_code
+      ? ` (written earlier as ${file.filename})`
+      : `${agentResourceIds.has(file.file_id) ? '' : ' (attached by user)'}${
+          displaced ? ` (uploaded as ${file.filename})` : ''
+        }`;
+  return `\n\t- /mnt/data/${destination}${origin}${getPreviewContextSuffix(file)}`;
 };
 
 const appendVisibleCodeFileContext = (toolContext, contextLine) => {
@@ -1079,6 +1229,9 @@ const getReuploadFailureCategory = (error) => {
   ) {
     return 'resource_access_denied';
   }
+  if (status === 429 || code === 'CODE_API_RATE_LIMITED') {
+    return 'rate_limited';
+  }
   return 'reupload_failed';
 };
 
@@ -1089,6 +1242,7 @@ const getReuploadFailureCategory = (error) => {
  * @param {Agent['tool_resources']} options.tool_resources
  * @param {string} [options.agentId] - The agent ID for file access control
  * @param {string} [options.agentResourceType] - Permission resource type for the authorized agent route
+ * @param {AbortSignal} [options.signal] - Effective run cancellation signal
  * @returns {Promise<{
  * files: Array<{ id: string; session_id: string; name: string }>,
  * toolContext: string,
@@ -1102,8 +1256,11 @@ const primeFiles = async (options) => {
     agentResourceType,
     codeApiBaseUrl,
     executionProfile = 'default',
+    executionRouteKey = executionProfile,
+    bridgeWorkerId,
+    signal,
   } = options;
-  const codeApiRoute = { baseUrl: codeApiBaseUrl, executionProfile };
+  const codeApiRoute = { baseUrl: codeApiBaseUrl, executionProfile, bridgeWorkerId };
   const file_ids = tool_resources?.[EToolResources.execute_code]?.file_ids ?? [];
   const agentResourceIds = new Set(file_ids);
   const resourceFiles = tool_resources?.[EToolResources.execute_code]?.files ?? [];
@@ -1143,30 +1300,24 @@ const primeFiles = async (options) => {
   }
 
   const files = [];
-  const sessions = new Map();
+  const uploadOptions = getCodeApiUploadOptions(req, executionRouteKey);
+  /** All stale-file reuploads in this prime share one live-turn wait cap. */
+  const uploadRateLimitBudget = createCodeApiRateLimitBudget(uploadOptions.retryWaitMs);
   let toolContext = '';
 
-  /* Per-file path counters — emitted at the bottom so a single
-   * grep on `[primeCodeFiles]` shows the input volume, the per-file
-   * paths taken, and the final dispatch summary in one trace. */
-  let skippedNoRef = 0;
+  const { selected, skippedNoRef, skippedSuperseded } = await selectCodeFiles({
+    files: dbFiles,
+    privateFileIds: agentResourceIds,
+    routeKey: executionRouteKey,
+    getFileInfo: (ref) => getSessionFileInfo(ref, req, codeApiRoute, signal),
+    concurrency: uploadOptions.concurrency,
+    signal,
+  });
   let reuploadFailures = 0;
   let requiredCodeFiles = 0;
   const reuploadFailureCategories = new Set();
 
-  for (let i = 0; i < dbFiles.length; i++) {
-    const file = dbFiles[i];
-    if (!file) {
-      continue;
-    }
-
-    const ref = getCodeEnvRefForProfile(file.metadata, executionProfile);
-    const sourceRef = ref ?? getCodeEnvRefs(file.metadata)[0]?.[1];
-    if (!sourceRef) {
-      skippedNoRef += 1;
-      logger.debug(`[primeCodeFiles] file=${file.file_id} path=skip reason=no-codeenvref`);
-      continue;
-    }
+  for (const { file, ref, sourceRef, sandboxName, isActive, getUploadTime } of selected) {
     requiredCodeFiles += 1;
     const session_id = sourceRef.storage_session_id;
     const id = sourceRef.file_id;
@@ -1187,10 +1338,12 @@ const primeFiles = async (options) => {
      * codeapi can resolve sessionKey per-file (kind switch +
      * tenant prefix from auth context).
      */
-    const pushFile = (overrideSessionId, overrideId) => {
+    const pushFile = (overrideSessionId, overrideId, destination = sandboxName) => {
+      /* The sandbox holds the converted name, not the record's, so the mount path has
+       * to follow the same rule provisioning uploaded under. */
       toolContext = appendVisibleCodeFileContext(
         toolContext,
-        getVisibleCodeFileContextLine(file, agentResourceIds),
+        getVisibleCodeFileContextLine(file, agentResourceIds, destination),
       );
       /* `id` is the storage file_id (drives codeapi's upload-key
        * existence check), `resource_id` is the entity that owns
@@ -1202,7 +1355,7 @@ const primeFiles = async (options) => {
         id: overrideId ?? id,
         resource_id: sourceRef.id,
         storage_session_id: overrideSessionId ?? session_id,
-        name: file.filename,
+        name: destination,
         kind: sourceRef.kind,
         ...(sourceRef.kind === 'skill' ? { version: sourceRef.version } : {}),
       });
@@ -1214,27 +1367,46 @@ const primeFiles = async (options) => {
         const { handleFileUpload: uploadCodeEnvFile } = getStrategyFunctions(
           FileSources.execute_code,
         );
-        const stream = await getDownloadStream(options.req, file.filepath);
         /* Reupload preserves the resource identity from the existing
          * ref so codeapi re-buckets under the same sessionKey shape
          * (skill stays skill, user stays user). Without this, a
          * skill-cache-miss reupload would land in the user bucket
          * and never re-shareable cross-user. */
-        const uploaded = await uploadCodeEnvFile({
-          req: options.req,
-          stream,
-          filename: file.filename,
-          kind: sourceRef.kind,
-          id: sourceRef.id,
-          ...(sourceRef.kind === 'skill' ? { version: sourceRef.version } : {}),
-          codeApiBaseUrl,
-          executionProfile,
+        const uploaded = await withCodeApiUploadRecovery({
+          registry: req.app?.locals?.codeApiUploadRegistry,
+          scope: uploadOptions.scope,
+          concurrency: uploadOptions.concurrency,
+          label: `re-uploading file ${file.file_id} to the code environment`,
+          budget: uploadRateLimitBudget,
+          signal,
+          onWait: (waitMs) =>
+            logger.warn(
+              `[primeCodeFiles] Rate-limited reupload requestId=${getPrimingCorrelation(req).requestId} ` +
+                `runId=${getPrimingCorrelation(req).runId}; retrying in ${waitMs}ms`,
+            ),
+          openSource: async () => {
+            signal?.throwIfAborted();
+            return getDownloadStream(options.req, resolveDownloadPath(file), { signal });
+          },
+          upload: (stream) =>
+            uploadCodeEnvFile({
+              req: options.req,
+              stream,
+              filename: sandboxName,
+              kind: sourceRef.kind,
+              id: sourceRef.id,
+              ...(sourceRef.kind === 'skill' ? { version: sourceRef.version } : {}),
+              codeApiBaseUrl,
+              executionProfile,
+              bridgeWorkerId,
+              signal,
+            }),
         });
 
         /**
          * Use the FRESH `(storage_session_id, file_id)` from the
-         * reupload response and route it through the dedupe Map, the
-         * persisted record, and the in-memory `files` list. The
+         * reupload response and route it through the persisted record
+         * and the in-memory `files` list. The
          * original ref captured at the top of this iteration refers
          * to the old, expired/missing sandbox object — using it here
          * would silently re-introduce the bug `Graph.sessions`
@@ -1249,7 +1421,9 @@ const primeFiles = async (options) => {
           id: sourceRef.id,
           storage_session_id: uploaded.storage_session_id,
           file_id: uploaded.file_id,
+          sandboxFilename: getUploadedCodeEnvFilename(uploaded, sandboxName),
           executionProfile,
+          ...(executionRouteKey !== executionProfile ? { executionRouteKey } : {}),
           ...(sourceRef.kind === 'skill' ? { version: sourceRef.version } : {}),
         };
 
@@ -1258,15 +1432,18 @@ const primeFiles = async (options) => {
         await updateFile({
           file_id: file.file_id,
           'metadata.codeEnvRef': updatedRefs.codeEnvRef,
-          [`metadata.codeEnvRefs.${executionProfile}`]: newRef,
+          [`metadata.codeEnvRefs.${executionRouteKey}`]: newRef,
         });
-        sessions.set(newRef.storage_session_id, true);
-        pushFile(newRef.storage_session_id, newRef.file_id);
+        pushFile(newRef.storage_session_id, newRef.file_id, newRef.sandboxFilename);
         logger.debug(
           `[primeCodeFiles] file=${file.file_id} path=reupload-success ` +
             `oldSession=${session_id} newSession=${newRef.storage_session_id} newFileId=${newRef.file_id}`,
         );
       } catch (error) {
+        /* Cancellation is an operation outcome, not a recoverable per-file
+         * miss. Swallowing it here would keep walking and could dispatch more
+         * uploads after the foreground run has ended. */
+        signal?.throwIfAborted();
         reuploadFailures += 1;
         const failureCategory = getReuploadFailureCategory(error);
         reuploadFailureCategories.add(failureCategory);
@@ -1285,14 +1462,8 @@ const primeFiles = async (options) => {
       await reuploadFile();
       continue;
     }
-    if (sessions.has(session_id)) {
-      logger.debug(
-        `[primeCodeFiles] file=${file.file_id} path=cache-hit-by-session storage_session_id=${session_id}`,
-      );
-      pushFile();
-      continue;
-    }
-    const uploadTime = await getSessionInfo(ref, req, codeApiRoute);
+    const uploadTime = await getUploadTime();
+    signal?.throwIfAborted();
     if (!uploadTime) {
       logger.debug(
         `[primeCodeFiles] file=${file.file_id} path=reupload reason=no-uploadtime ` +
@@ -1301,7 +1472,7 @@ const primeFiles = async (options) => {
       await reuploadFile();
       continue;
     }
-    if (!checkIfActive(uploadTime)) {
+    if (!isActive) {
       logger.debug(
         `[primeCodeFiles] file=${file.file_id} path=reupload reason=stale ` +
           `uploadTime=${uploadTime} storage_session_id=${session_id}`,
@@ -1309,7 +1480,6 @@ const primeFiles = async (options) => {
       await reuploadFile();
       continue;
     }
-    sessions.set(session_id, true);
     logger.debug(
       `[primeCodeFiles] file=${file.file_id} path=fresh-active storage_session_id=${session_id}`,
     );
@@ -1325,7 +1495,8 @@ const primeFiles = async (options) => {
   const { requestId, runId } = getPrimingCorrelation(req);
   logger.debug(
     `[primeCodeFiles] out: returned=${files.length} ` +
-      `required=${requiredCodeFiles} skippedNoRef=${skippedNoRef} reuploadFailures=${reuploadFailures}`,
+      `required=${requiredCodeFiles} skippedNoRef=${skippedNoRef} ` +
+      `skippedSuperseded=${skippedSuperseded} reuploadFailures=${reuploadFailures}`,
   );
 
   if (allRequiredResourcesFailed) {
@@ -1377,6 +1548,7 @@ async function readSandboxFile({
   runtime_session_hint,
   codeApiBaseUrl,
   executionProfile,
+  bridgeWorkerId,
   req,
 }) {
   const baseURL = codeApiBaseUrl ?? getCodeBaseURL();
@@ -1401,9 +1573,10 @@ async function readSandboxFile({
     postData.files = files;
   }
 
+  let response;
   try {
-    const authHeaders = await getCodeApiAuthHeaders(req);
-    const response = await axios({
+    const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+    response = await axios({
       method: 'post',
       url: `${baseURL}/exec`,
       data: postData,
@@ -1411,20 +1584,12 @@ async function readSandboxFile({
         'Content-Type': 'application/json',
         'User-Agent': 'LibreChat/1.0',
         ...authHeaders,
-        ...(executionProfile ? { [CODE_API_EXPECTED_PROFILE_HEADER]: executionProfile } : {}),
+        ...(executionProfile ? codeExecutionHeaders({ executionProfile, bridgeWorkerId }) : {}),
       },
       httpAgent: codeServerHttpAgent,
       httpsAgent: codeServerHttpsAgent,
       timeout: 15000,
     });
-    const result = response?.data ?? {};
-    if (result.stderr && (result.stdout == null || result.stdout === '')) {
-      throw new Error(String(result.stderr).trim());
-    }
-    if (result.stdout == null) {
-      return null;
-    }
-    return { content: String(result.stdout) };
   } catch (error) {
     logAxiosError({
       message: `Error reading sandbox file "${file_path}"`,
@@ -1432,18 +1597,269 @@ async function readSandboxFile({
     });
     throw error;
   }
+
+  const result = response?.data ?? {};
+  if (result.stderr && (result.stdout == null || result.stdout === '')) {
+    const reason = String(result.stderr).trim();
+    /** An absent path is the ordinary outcome, not a fault: `create_file`
+     *  reads its target before writing so it can tell a create from an
+     *  overwrite. Logging that at error level with a stack made every
+     *  file creation look like a file that had gone missing. */
+    if (isMissingSandboxPathError(reason)) {
+      logger.debug(`[readSandboxFile] "${file_path}" is not present in the sandbox: ${reason}`);
+    } else {
+      logger.error(`[readSandboxFile] Error reading sandbox file "${file_path}": ${reason}`);
+    }
+    throw new Error(reason);
+  }
+  if (result.stdout == null) {
+    return null;
+  }
+  return { content: String(result.stdout) };
 }
 
 /**
- * Reads a small image file out of the code-execution sandbox as base64 so
- * `read_file` can surface it to vision-capable models. `readSandboxFile`'s
+ * Reads a bounded range from the workspace directory registered by an attached worker.
+ * The authenticated worker route is derived from the selected environment and
+ * the host path remains private to the worker.
+ *
+ * @param {Object} params
+ * @param {string} params.file_path
+ * @param {string} params.workspace_id
+ * @param {number} params.start_line
+ * @param {number} params.max_lines
+ * @param {string} params.codeApiBaseUrl
+ * @param {'default' | 'stateful'} params.executionProfile
+ * @param {string} [params.bridgeWorkerId]
+ * @param {ServerRequest} [params.req]
+ * @param {AbortSignal} [params.signal]
+ */
+async function readWorkspaceFile({
+  file_path,
+  workspace_id,
+  start_line,
+  max_lines,
+  codeApiBaseUrl,
+  executionProfile,
+  bridgeWorkerId,
+  req,
+  signal,
+}) {
+  const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+  return executeWorkspaceTool({
+    baseURL: codeApiBaseUrl,
+    authHeaders: {
+      ...authHeaders,
+      ...codeExecutionHeaders({ executionProfile, bridgeWorkerId }),
+    },
+    request: {
+      protocolVersion: 1,
+      operation: 'read_file',
+      workspaceId: workspace_id,
+      path: file_path,
+      startLine: start_line,
+      maxLines: max_lines,
+    },
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/**
+ * Searches literal text within the workspace directory registered by an attached worker.
+ *
+ * @param {Object} params
+ * @param {string} params.query
+ * @param {string} params.workspace_id
+ * @param {string} [params.path]
+ * @param {number} params.max_results
+ * @param {string} params.codeApiBaseUrl
+ * @param {'default' | 'stateful'} params.executionProfile
+ * @param {string} [params.bridgeWorkerId]
+ * @param {ServerRequest} [params.req]
+ * @param {AbortSignal} [params.signal]
+ */
+async function searchWorkspace({
+  query,
+  workspace_id,
+  path,
+  max_results,
+  codeApiBaseUrl,
+  executionProfile,
+  bridgeWorkerId,
+  req,
+  signal,
+}) {
+  const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+  return executeWorkspaceTool({
+    baseURL: codeApiBaseUrl,
+    authHeaders: {
+      ...authHeaders,
+      ...codeExecutionHeaders({ executionProfile, bridgeWorkerId }),
+    },
+    request: {
+      protocolVersion: 1,
+      operation: 'search_text',
+      workspaceId: workspace_id,
+      query,
+      ...(path ? { path } : {}),
+      maxResults: max_results,
+    },
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/**
+ * Lists relative files within the workspace directory registered by an attached worker.
+ *
+ * @param {Object} params
+ * @param {string} params.workspace_id
+ * @param {string} [params.path]
+ * @param {string} [params.after_path]
+ * @param {number} params.max_results
+ * @param {string} params.codeApiBaseUrl
+ * @param {'default' | 'stateful'} params.executionProfile
+ * @param {string} [params.bridgeWorkerId]
+ * @param {ServerRequest} [params.req]
+ * @param {AbortSignal} [params.signal]
+ */
+async function listWorkspaceFiles({
+  workspace_id,
+  path,
+  after_path,
+  max_results,
+  codeApiBaseUrl,
+  executionProfile,
+  bridgeWorkerId,
+  req,
+  signal,
+}) {
+  const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+  return executeWorkspaceTool({
+    baseURL: codeApiBaseUrl,
+    authHeaders: {
+      ...authHeaders,
+      ...codeExecutionHeaders({ executionProfile, bridgeWorkerId }),
+    },
+    request: {
+      protocolVersion: 1,
+      operation: 'list_files',
+      workspaceId: workspace_id,
+      ...(path ? { path } : {}),
+      ...(after_path ? { afterPath: after_path } : {}),
+      maxResults: max_results,
+    },
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/** Writes a UTF-8 file in the workspace registered by an attached worker. */
+async function writeWorkspaceFile({
+  file_path,
+  content,
+  overwrite,
+  workspace_id,
+  codeApiBaseUrl,
+  executionProfile,
+  bridgeWorkerId,
+  req,
+  signal,
+}) {
+  const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+  return executeWorkspaceTool({
+    baseURL: codeApiBaseUrl,
+    authHeaders: {
+      ...authHeaders,
+      ...codeExecutionHeaders({ executionProfile, bridgeWorkerId }),
+    },
+    request: {
+      protocolVersion: 1,
+      operation: 'write_file',
+      workspaceId: workspace_id,
+      path: file_path,
+      content,
+      overwrite,
+    },
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/** Applies an ordered exact-edit batch in one attached-worker mutation. */
+async function editWorkspaceFile({
+  file_path,
+  edits,
+  expected_base_sha256,
+  workspace_id,
+  codeApiBaseUrl,
+  executionProfile,
+  bridgeWorkerId,
+  req,
+  signal,
+}) {
+  const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+  return executeWorkspaceTool({
+    baseURL: codeApiBaseUrl,
+    authHeaders: {
+      ...authHeaders,
+      ...codeExecutionHeaders({ executionProfile, bridgeWorkerId }),
+    },
+    request: {
+      protocolVersion: 1,
+      operation: 'edit_file',
+      workspaceId: workspace_id,
+      path: file_path,
+      edits,
+      ...(expected_base_sha256 ? { expectedBaseSha256: expected_base_sha256 } : {}),
+    },
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/** Previews an ordered exact-edit batch without mutating the attached workspace. */
+async function previewWorkspaceEdit({
+  file_path,
+  edits,
+  workspace_id,
+  codeApiBaseUrl,
+  executionProfile,
+  bridgeWorkerId,
+  req,
+  signal,
+}) {
+  const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+  return executeWorkspaceTool({
+    baseURL: codeApiBaseUrl,
+    authHeaders: {
+      ...authHeaders,
+      ...codeExecutionHeaders({ executionProfile, bridgeWorkerId }),
+    },
+    request: {
+      protocolVersion: 1,
+      operation: 'preview_edit',
+      workspaceId: workspace_id,
+      path: file_path,
+      edits,
+    },
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/**
+ * Reads a small code artifact as base64 so `read_file` can surface it to
+ * vision-capable models. Reuses bytes fetched by the current request's
+ * artifact preflight when the requested path resolves to the exact returned
+ * file ref; otherwise falls back to the code-execution sandbox.
+ * `readSandboxFile`'s
  * `cat` round-trips stdout through codeapi's JSON transport, which lossily
- * replaces non-UTF-8 bytes and corrupts image data. Here a tiny Python
- * reader stats the file, refuses (without transferring) anything over
- * `maxBytes`, and otherwise base64-encodes the bytes IN the sandbox so the
- * payload stays ASCII-safe across the JSON `/exec` transport. Session
- * forwarding mirrors `readSandboxFile` so the read lands in the same
- * sandbox session that holds the agent's prior-turn artifacts.
+ * replaces non-UTF-8 bytes and corrupts image data. The in-sandbox reader
+ * base64-encodes the bytes instead, so the payload stays ASCII-safe across
+ * the JSON `/exec` transport. Session forwarding mirrors `readSandboxFile`
+ * so the read lands in the same sandbox session that holds the agent's
+ * prior-turn artifacts.
+ *
+ * Windowing, window sizing, and assembly live in `@librechat/api`
+ * (`readWindowedSandboxImage`); this function is the `/exec` transport it
+ * calls, plus the rate-limit wait that keeps a multi-window read from
+ * discarding the bytes it already pulled.
  *
  * @param {Object} params
  * @param {string} params.file_path - Path inside the sandbox (e.g. `/mnt/data/chart.png`).
@@ -1452,7 +1868,11 @@ async function readSandboxFile({
  * @param {string} [params.runtime_session_hint] - Per-conversation stateful runtime-session hint.
  * @param {number} [params.maxBytes] - In-sandbox size cap; larger files return `{ tooLarge, bytes }`.
  * @param {ServerRequest} [params.req] - Current authenticated request, used to mint Code API auth.
- * @returns {Promise<{base64: string, bytes: number} | {tooLarge: true, bytes: number} | null>}
+ * @param {AbortSignal} [params.signal] - Foreground run cancellation.
+ * @param {string} [params.executionRouteKey] - Trusted deployment-local route identity.
+ * @param {string} [params.bridgeWorkerId] - Trusted bridge worker selected for this execution.
+ * @returns {Promise<{base64: string, bytes: number}
+ *   | {tooLarge: true, reason: 'size' | 'round_trips', bytes: number} | null>}
  *   `null` when codeapi is unavailable; throws on transport / read errors.
  */
 async function readSandboxImage({
@@ -1462,132 +1882,67 @@ async function readSandboxImage({
   runtime_session_hint,
   codeApiBaseUrl,
   executionProfile,
+  bridgeWorkerId,
+  executionRouteKey,
   maxBytes,
   req,
+  signal,
 }) {
+  const limit = typeof maxBytes === 'number' && maxBytes > 0 ? maxBytes : 5 * megabyte;
+  const preparedBuffer = getPreparedCodeOutputBuffer({
+    req,
+    file_path,
+    session_id,
+    files,
+    codeApiBaseUrl,
+    executionProfile,
+    executionRouteKey,
+  });
+  if (preparedBuffer) {
+    if (preparedBuffer.length > limit) {
+      return { tooLarge: true, reason: 'size', bytes: preparedBuffer.length };
+    }
+    return { base64: preparedBuffer.toString('base64'), bytes: preparedBuffer.length };
+  }
+
   const baseURL = codeApiBaseUrl ?? getCodeBaseURL();
   if (!baseURL) {
     return null;
   }
 
-  const limit = typeof maxBytes === 'number' && maxBytes > 0 ? maxBytes : 5 * megabyte;
-  const chunkBytes = getImageChunkBytes();
-  const maxChunks = Math.ceil(limit / chunkBytes) + 1;
-
-  /** @type {Buffer[]} */
-  const parts = [];
-  let offset = 0;
-  let total = null;
-
-  for (let i = 0; i < maxChunks; i++) {
-    const payload = Buffer.from(
-      JSON.stringify({ file_path, limit, offset, chunk: chunkBytes }),
-      'utf8',
-    ).toString('base64');
-    const code = [
-      "python3 - <<'PY'",
-      'import base64, json, os, stat',
-      `payload = ${JSON.stringify(payload)}`,
-      "data = json.loads(base64.b64decode(payload).decode('utf-8'))",
-      "p = data['file_path']",
-      "limit = data['limit']",
-      "offset = data['offset']",
-      "chunk = data['chunk']",
-      'try:',
-      '    st = os.stat(p)',
-      'except OSError as e:',
-      '    print(json.dumps({"error": str(e)}))',
-      '    raise SystemExit(0)',
-      // Reject FIFOs, sockets, and device files (e.g. a symlink to /dev/zero):
-      // os.stat can report a small/zero size while an unbounded read blocks or
-      // streams forever until the request times out.
-      'if not stat.S_ISREG(st.st_mode):',
-      '    print(json.dumps({"error": "not a regular file"}))',
-      '    raise SystemExit(0)',
-      'if st.st_size > limit:',
-      '    print(json.dumps({"too_large": True, "bytes": st.st_size}))',
-      '    raise SystemExit(0)',
-      // Read only this window. The whole base64 payload cannot be emitted in
-      // one shot: the runner caps stdout at SANDBOX_OUTPUT_MAX_SIZE (1024
-      // bytes by default) and SIGKILLs the job on overflow, which truncates
-      // the JSON mid-string. Windowing keeps every response under that cap.
-      "with open(p, 'rb') as f:",
-      '    f.seek(offset)',
-      '    raw = f.read(chunk)',
-      'print(json.dumps({"total": st.st_size, "n": len(raw), "b64": base64.b64encode(raw).decode("ascii")}))',
-      'PY',
-    ].join('\n');
-
-    const parsed = await execSandboxImageChunk({
-      baseURL,
-      code,
-      file_path,
-      session_id,
-      runtime_session_hint,
-      executionProfile,
-      files,
-      req,
-      chunkBytes,
-    });
-
-    if (parsed.error) {
-      throw new Error(String(parsed.error));
-    }
-    if (parsed.too_large === true) {
-      return { tooLarge: true, bytes: Number(parsed.bytes) || 0 };
-    }
-    if (typeof parsed.b64 !== 'string' || typeof parsed.n !== 'number') {
-      return null;
-    }
-
-    if (total == null) {
-      total = Number(parsed.total) || 0;
-      if (total > limit) {
-        return { tooLarge: true, bytes: total };
-      }
-    } else if (Number(parsed.total) !== total) {
-      /* The file changed underneath us; a spliced-together buffer would be
-       * a mix of two versions rather than any real image. */
-      throw new Error(`"${file_path}" changed while being read from the sandbox`);
-    }
-
-    parts.push(Buffer.from(parsed.b64, 'base64'));
-    offset += parsed.n;
-
-    if (parsed.n === 0 || offset >= total) {
-      break;
-    }
-  }
-
-  const buffer = Buffer.concat(parts);
-  if (total == null) {
-    return null;
-  }
-  if (buffer.length !== total) {
-    /* Ran out of chunk budget (or short reads); returning a partial image
-     * would render as a corrupt file, so surface it as unreadable-inline. */
-    return { tooLarge: true, bytes: total };
-  }
-  return { base64: buffer.toString('base64'), bytes: buffer.length };
+  /** Every window is one `/exec` call against the Code API's per-user
+   *  execution limiter, so the read shares one wait budget: a window that
+   *  resets mid-read is worth pausing for, an exhausted budget is not. */
+  const rateLimit = createCodeApiRateLimitBudget(
+    req?.config?.endpoints?.agents?.codeApiMaxRetryWaitMs,
+  );
+  return readWindowedSandboxImage({
+    filePath: file_path,
+    baseUrl: baseURL,
+    limit,
+    readChunk: ({ code }) =>
+      execSandboxImageChunk({
+        baseURL,
+        code,
+        file_path,
+        session_id,
+        runtime_session_hint,
+        executionProfile,
+        bridgeWorkerId,
+        files,
+        req,
+        rateLimit,
+        signal,
+      }),
+  });
 }
 
 /**
- * Raw bytes pulled per `/exec` round-trip when inlining a sandbox image.
- * Each chunk is base64-encoded (~1.33x) into the response's stdout, which
- * the runner truncates + SIGKILLs past `SANDBOX_OUTPUT_MAX_SIZE`. The
- * default leaves headroom for a runner configured at 64KB; deployments
- * with a smaller cap must lower this, and a larger cap can raise it to cut
- * round-trips.
- * @returns {number}
- */
-function getImageChunkBytes() {
-  const parsed = Number(process.env.LIBRECHAT_CODE_IMAGE_CHUNK_BYTES);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 32 * 1024;
-}
-
-/**
- * Runs one image-chunk read over `/exec` and parses its JSON line.
- * @returns {Promise<Record<string, unknown>>}
+ * Runs one image-window read over `/exec` and hands the response to the
+ * shared parser. Rate limits are waited out inside the shared budget; a
+ * truncated response comes back as a chunk the reader narrows for, not an
+ * error, so it is neither logged nor thrown here.
+ * @returns {Promise<import('@librechat/api').SandboxImageChunk>}
  */
 async function execSandboxImageChunk({
   baseURL,
@@ -1596,9 +1951,11 @@ async function execSandboxImageChunk({
   session_id,
   runtime_session_hint,
   executionProfile,
+  bridgeWorkerId,
   files,
   req,
-  chunkBytes,
+  rateLimit,
+  signal,
 }) {
   /** @type {Record<string, unknown>} */
   const postData = { lang: 'bash', code };
@@ -1613,52 +1970,34 @@ async function execSandboxImageChunk({
   }
 
   try {
-    const authHeaders = await getCodeApiAuthHeaders(req);
-    const response = await axios({
-      method: 'post',
-      url: `${baseURL}/exec`,
-      data: postData,
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'LibreChat/1.0',
-        ...authHeaders,
-        ...(executionProfile ? { [CODE_API_EXPECTED_PROFILE_HEADER]: executionProfile } : {}),
+    const response = await withCodeApiRateLimit({
+      label: `reading "${file_path}" from the sandbox`,
+      budget: rateLimit,
+      signal,
+      onWait: (waitMs) =>
+        logger.warn(
+          `[readSandboxImage] Rate-limited reading "${file_path}"; retrying in ${waitMs}ms`,
+        ),
+      attempt: async () => {
+        const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
+        return axios({
+          method: 'post',
+          url: `${baseURL}/exec`,
+          data: postData,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'LibreChat/1.0',
+            ...authHeaders,
+            ...(executionProfile ? codeExecutionHeaders({ executionProfile, bridgeWorkerId }) : {}),
+          },
+          httpAgent: codeServerHttpAgent,
+          httpsAgent: codeServerHttpsAgent,
+          timeout: 15000,
+          signal,
+        });
       },
-      httpAgent: codeServerHttpAgent,
-      httpsAgent: codeServerHttpsAgent,
-      timeout: 15000,
     });
-    const result = response?.data ?? {};
-    /* The runner truncates stdout at SANDBOX_OUTPUT_MAX_SIZE and SIGKILLs the
-     * job (status `OL`). Detect that explicitly: the surviving stdout is a
-     * base64 string cut mid-flight, so parsing it yields a misleading
-     * "unexpected output" instead of naming the real, fixable cause. */
-    if (result.status === 'OL') {
-      throw new Error(
-        `Reading "${file_path}" exceeded the sandbox stdout limit (chunk ${chunkBytes} bytes). ` +
-          'Lower LIBRECHAT_CODE_IMAGE_CHUNK_BYTES or raise SANDBOX_OUTPUT_MAX_SIZE on the runner.',
-      );
-    }
-    if (result.stderr && (result.stdout == null || result.stdout === '')) {
-      throw new Error(String(result.stderr).trim());
-    }
-    if (result.stdout == null || String(result.stdout).trim() === '') {
-      return {};
-    }
-    /* Parse the LAST non-empty line: the reader's JSON is the final thing it
-     * prints, so anything a shell profile or library emitted ahead of it
-     * (banners, warnings) must not break the read. */
-    const lines = String(result.stdout)
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
-    try {
-      return JSON.parse(lines[lines.length - 1]);
-    } catch {
-      throw new Error(
-        `Unexpected output while reading image bytes from the sandbox: ${String(result.stdout).slice(0, 120)}`,
-      );
-    }
+    return parseSandboxImageChunk(response?.data ?? {});
   } catch (error) {
     logAxiosError({
       message: `Error reading sandbox image "${file_path}"`,
@@ -1680,7 +2019,7 @@ async function execSandboxImageChunk({
  * @param {string} [params.session_id] - Sandbox session id from the seeded context.
  * @param {Array<{id: string, name: string, session_id?: string}>} [params.files] - File refs to mount.
  * @param {ServerRequest} [params.req] - Current authenticated request, used to mint Code API auth.
- * @returns {Promise<{stdout?: string, stderr?: string, session_id?: string, files?: Array<Object>} | null>}
+ * @returns {Promise<{stdout?: string, stderr?: string, session_id?: string, files?: Array<Object>, artifact_delivery?: {code: 'artifact_delivery_failed', status: 'partial' | 'failed', attempted: number, delivered: number, failed: number}} | null>}
  */
 async function writeSandboxFile({
   file_path,
@@ -1690,6 +2029,7 @@ async function writeSandboxFile({
   runtime_session_hint,
   codeApiBaseUrl,
   executionProfile,
+  bridgeWorkerId,
   req,
 }) {
   const baseURL = codeApiBaseUrl ?? getCodeBaseURL();
@@ -1733,7 +2073,7 @@ async function writeSandboxFile({
   }
 
   try {
-    const authHeaders = await getCodeApiAuthHeaders(req);
+    const authHeaders = await getCodeApiAuthHeaders(req, bridgeWorkerId);
     const response = await axios({
       method: 'post',
       url: `${baseURL}/exec`,
@@ -1742,7 +2082,7 @@ async function writeSandboxFile({
         'Content-Type': 'application/json',
         'User-Agent': 'LibreChat/1.0',
         ...authHeaders,
-        ...(executionProfile ? { [CODE_API_EXPECTED_PROFILE_HEADER]: executionProfile } : {}),
+        ...(executionProfile ? codeExecutionHeaders({ executionProfile, bridgeWorkerId }) : {}),
       },
       httpAgent: codeServerHttpAgent,
       httpsAgent: codeServerHttpsAgent,
@@ -1760,6 +2100,7 @@ async function writeSandboxFile({
       stderr: result.stderr == null ? undefined : String(result.stderr),
       session_id: result.session_id,
       files: result.files,
+      artifact_delivery: normalizeArtifactDeliveryFailure(result.artifact_delivery),
     };
   } catch (error) {
     logAxiosError({
@@ -1777,6 +2118,12 @@ module.exports = {
   getSessionInfo,
   processCodeOutput,
   prepareCodeOutputForInspection,
+  readWorkspaceFile,
+  searchWorkspace,
+  listWorkspaceFiles,
+  writeWorkspaceFile,
+  previewWorkspaceEdit,
+  editWorkspaceFile,
   readSandboxFile,
   readSandboxImage,
   writeSandboxFile,

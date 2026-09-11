@@ -148,6 +148,27 @@ const mockResponsesUsage = {
   subagent: { input_tokens: 25, output_tokens: 10, total_tokens: 35 },
 };
 const mockBuildResponsesUsage = jest.fn().mockReturnValue(mockResponsesUsage);
+const mockEnrollAgentExecution = jest.fn();
+let mockExecution;
+
+function resetMockExecution() {
+  const controller = new AbortController();
+  mockExecution = {
+    signal: controller.signal,
+    abort: jest.fn((reason) => controller.abort(reason)),
+    track: jest.fn((promise) => promise),
+    beginProviderExecution: jest.fn(async () => {
+      if (controller.signal.aborted) {
+        throw Object.assign(new Error('request disconnected'), {
+          code: 'RUN_REPLACED',
+          status: 409,
+        });
+      }
+    }),
+    settle: jest.fn().mockResolvedValue(undefined),
+  };
+  mockEnrollAgentExecution.mockResolvedValue(mockExecution);
+}
 
 jest.mock('nanoid', () => ({
   nanoid: jest.fn(() => 'mock-nanoid-123'),
@@ -175,12 +196,20 @@ jest.mock('@librechat/agents', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
+  /* Provisioning moved into this package; the controllers build the callback from it. */
+  createProvisionFilesCallback: () => async () => {},
+  createAgentExecutionContext: (context) => context,
+  /** Grants both by default; the capability set is what these specs vary. */
+  resolveToolRoleGrants: jest.fn(async () => ({ runCode: true, fileSearch: true })),
   SAFE_CONVERSATION_TITLE: 'New Chat',
   resolveConversationTitle: (...args) => mockResolveConversationTitle(...args),
   /** Pass-through: the controller strips UI-only activity-label parts
    *  before SDK formatting; the mock must expose it like any other used
    *  export or the call throws before the assertions run. */
   stripActivityLabelParts: jest.fn((payload) => payload),
+  createOwnedToolEndHandler: jest.fn(
+    (...args) => new (require('@librechat/agents').ToolEndHandler)(...args),
+  ),
   collectReachableAgents: (roots) => {
     const agents = [];
     const pending = [...roots];
@@ -201,12 +230,19 @@ jest.mock('@librechat/api', () => ({
   }),
   buildInitialToolSessions: jest.fn().mockReturnValue(mockInitialSessions),
   applyContextToAgent: (...args) => mockApplyContextToAgent(...args),
-  buildToolSet: jest.fn().mockReturnValue(new Set()),
+  buildRunToolSet: jest.fn().mockReturnValue(new Set()),
   AgentRunEnvelopeError: MockAgentRunEnvelopeError,
   createAgentRunEnvelope: (...args) => mockCreateAgentRunEnvelope(...args),
-  createMCPRuntimeRequestBody: ({ messageId, conversationId, parentMessageId }) => ({
+  getCodeWorkspaceSelections: jest.fn(),
+  createMCPRuntimeRequestBody: ({
     messageId,
     conversationId,
+    parentMessageId,
+    codeWorkspaces,
+  }) => ({
+    messageId,
+    conversationId,
+    ...(codeWorkspaces !== undefined && { codeWorkspaces }),
     ...(parentMessageId !== undefined && {
       parentMessageId: parentMessageId ?? '00000000-0000-0000-0000-000000000000',
     }),
@@ -267,6 +303,7 @@ jest.mock('@librechat/api', () => ({
     alwaysApplyDedupedFromManual: 0,
   }),
   createToolExecuteHandler: jest.fn().mockReturnValue({ handle: jest.fn() }),
+  resolveRecursionLimit: jest.fn().mockReturnValue(50),
   // Responses API
   writeDone: jest.fn(),
   buildResponse: jest.fn().mockReturnValue({ id: 'resp_123', output: [] }),
@@ -291,6 +328,14 @@ jest.mock('@librechat/api', () => ({
   hasModelBoundContentProtection: mockHasModelBoundContentProtection,
   isContentFilterError: jest.fn((error) => error?.code === 'content_filter_block'),
   getSafeErrorMetadata: mockGetSafeErrorMetadata,
+  /** Mirrors the real helper's contract: generic copy under content protection, otherwise the
+   *  provider's own message. Stripping of LangChain's docs URL is covered in its own unit test. */
+  getUserFacingProviderError: (error, protectionEnabled) => {
+    if (protectionEnabled) {
+      return 'An error occurred while processing the request';
+    }
+    return error instanceof Error ? error.message : 'An error occurred';
+  },
   contentFilterBlockResponse: jest.fn().mockReturnValue({
     error: 'content_filter_block',
     message: 'Submitted content was blocked.',
@@ -340,6 +385,53 @@ jest.mock('@librechat/api', () => ({
     on_run_step_delta: { handle: jest.fn() },
     on_chat_model_end: { handle: jest.fn() },
   }),
+  executeAgentRun: async ({
+    envelope,
+    runId,
+    conversationId,
+    connection,
+    isPrincipalActive,
+    execute,
+    handleExecutionError,
+    beforeSettle,
+  }) => {
+    let execution;
+    let executionError;
+    let closed = connection?.isClosed() ?? false;
+    const removeCloseListener =
+      connection?.onClose(() => {
+        closed = true;
+        execution?.abort();
+      }) ?? (() => undefined);
+    try {
+      execution = await mockEnrollAgentExecution({
+        runId,
+        userId: envelope.principal.userId,
+        conversationId,
+        agentId: envelope.payload.model,
+        protocol: envelope.protocol,
+        isPrincipalActive,
+      });
+      if (closed || connection?.isClosed() === true) execution.abort();
+      await execution.beginProviderExecution();
+      return await execute(execution);
+    } catch (error) {
+      executionError = error;
+      if (handleExecutionError) return await handleExecutionError(error);
+      throw error;
+    } finally {
+      removeCloseListener();
+      if (execution) {
+        await beforeSettle?.(execution, executionError);
+        await execution.settle(executionError);
+      }
+    }
+  },
+  waitForAgentExecutionWrites: async (writes) => {
+    const results = await Promise.allSettled(writes);
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  },
 }));
 
 jest.mock('~/server/services/ToolService', () => ({
@@ -441,6 +533,7 @@ jest.mock('~/models', () => ({
   getFormattedMemories: jest.fn().mockResolvedValue({ withKeys: '', withoutKeys: '' }),
   saveConvo: jest.fn().mockResolvedValue({}),
   getConvo: jest.fn().mockResolvedValue(null),
+  isSubagentOwnerAdmissible: jest.fn().mockResolvedValue(true),
 }));
 
 let mockGlobalDiscoveredAgentConfigs = null;
@@ -451,6 +544,7 @@ describe('createResponse controller', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    resetMockExecution();
     mockGlobalDiscoveredAgentConfigs = null;
     require('@librechat/api').inspectContent.mockReset().mockReturnValue(null);
 
@@ -469,7 +563,8 @@ describe('createResponse controller', () => {
           agents: { allowedProviders: ['anthropic'] },
         },
       },
-      on: jest.fn(),
+      once: jest.fn(),
+      off: jest.fn(),
     };
 
     res = {
@@ -479,7 +574,116 @@ describe('createResponse controller', () => {
       flushHeaders: jest.fn(),
       end: jest.fn(),
       write: jest.fn(),
+      once: jest.fn(),
+      off: jest.fn(),
     };
+  });
+
+  it.each([false, true])(
+    'passes explicit or owner-loaded workspace selections to runtime: continuation=%s',
+    async (continuation) => {
+      const api = require('@librechat/api');
+      const selections = [{ environmentId: 'machine', workspaceId: 'project' }];
+      const request = {
+        model: 'agent-123',
+        input: 'Hello',
+        stream: false,
+        ...(continuation ? { previous_response_id: 'previous' } : { code_workspaces: selections }),
+      };
+      api.validateResponseRequest.mockReturnValueOnce({ request });
+      if (continuation)
+        require('~/models').getConvo.mockResolvedValueOnce({
+          conversationId: 'previous',
+          codeWorkspaces: selections,
+        });
+      await createResponse(req, res);
+      expect(api.initializeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestBody: expect.objectContaining({ codeWorkspaces: selections }),
+        }),
+        expect.anything(),
+      );
+      if (continuation)
+        expect(require('~/models').getConvo).toHaveBeenCalledWith('user-123', 'previous');
+    },
+  );
+
+  it('enrolls, starts, and settles the remote execution lifecycle', async () => {
+    await createResponse(req, res);
+
+    expect(mockEnrollAgentExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'resp_mock-123',
+        userId: 'user-123',
+        agentId: 'agent-123',
+        protocol: 'responses',
+      }),
+    );
+    const { createRun } = require('@librechat/api');
+    const processStream = await createRun.mock.results.at(-1).value;
+    expect(mockExecution.beginProviderExecution).toHaveBeenCalledTimes(1);
+    expect(mockExecution.beginProviderExecution.mock.invocationCallOrder[0]).toBeLessThan(
+      require('@librechat/api').initializeAgent.mock.invocationCallOrder[0],
+    );
+    expect(mockExecution.beginProviderExecution.mock.invocationCallOrder[0]).toBeLessThan(
+      processStream.processStream.mock.invocationCallOrder[0],
+    );
+    expect(mockExecution.settle).toHaveBeenCalledWith(undefined);
+    expect(res.once).toHaveBeenCalledWith('close', expect.any(Function));
+    expect(res.off).toHaveBeenCalledWith('close', expect.any(Function));
+  });
+
+  it('covers artifact writes when provider execution fails', async () => {
+    const providerError = new Error('provider aborted');
+    const artifactWrite = Promise.resolve(null);
+    const processStream = jest.fn().mockRejectedValue(providerError);
+    const { createRun } = require('@librechat/api');
+    const { createToolEndCallback } = require('~/server/controllers/agents/callbacks');
+    createRun.mockResolvedValueOnce({ processStream });
+    createToolEndCallback.mockImplementationOnce(({ artifactPromises }) => {
+      artifactPromises.push(artifactWrite);
+      return jest.fn();
+    });
+
+    await createResponse(req, res);
+
+    expect(mockExecution.track).toHaveBeenCalledWith(expect.any(Promise));
+    expect(mockExecution.track.mock.invocationCallOrder[0]).toBeLessThan(
+      mockExecution.settle.mock.invocationCallOrder[0],
+    );
+    expect(mockExecution.settle).toHaveBeenCalledWith(providerError);
+  });
+
+  it('does not initialize a provider after disconnecting during enrollment', async () => {
+    let finishEnrollment;
+    mockEnrollAgentExecution.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishEnrollment = resolve;
+        }),
+    );
+
+    const request = createResponse(req, res);
+    await Promise.resolve();
+    res.once.mock.calls[0][1]();
+    finishEnrollment(mockExecution);
+    await request;
+
+    expect(mockExecution.abort).toHaveBeenCalledTimes(1);
+    expect(mockExecution.beginProviderExecution).toHaveBeenCalledTimes(1);
+    expect(require('@librechat/api').initializeAgent).not.toHaveBeenCalled();
+    expect(mockExecution.settle).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'RUN_REPLACED' }),
+    );
+  });
+
+  it('does not treat a consumed request stream as a response disconnect', async () => {
+    req.destroyed = true;
+
+    await createResponse(req, res);
+
+    expect(mockExecution.abort).not.toHaveBeenCalled();
+    expect(mockExecution.beginProviderExecution).toHaveBeenCalledTimes(1);
   });
 
   it('resolves saved graph subagents for remote Responses API runs', async () => {
@@ -545,7 +749,26 @@ describe('createResponse controller', () => {
     );
     const { createRun } = require('@librechat/api');
     expect(createRun).toHaveBeenCalledWith(
-      expect.objectContaining({ initialSessions: mockInitialSessions }),
+      expect.objectContaining({
+        initialSessions: mockInitialSessions,
+        user: expect.objectContaining({ id: 'user-123' }),
+        traceContext: { endpoint: 'agents' },
+      }),
+    );
+  });
+
+  it('invokes the graph with the resolved recursion limit rather than the SDK default', async () => {
+    const api = require('@librechat/api');
+    const processStream = jest.fn().mockResolvedValue(undefined);
+    api.createRun.mockResolvedValueOnce({ processStream });
+    api.resolveRecursionLimit.mockReturnValueOnce(123);
+
+    await createResponse(req, res);
+
+    expect(processStream).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ recursionLimit: 123 }),
+      expect.anything(),
     );
   });
 
@@ -639,9 +862,10 @@ describe('createResponse controller', () => {
       req.user = {
         id: 'user-123',
         role: 'USER',
-        tenantId: 'tenant-123',
+        tenantId: 'stale-user-tenant',
         federatedTokens: { access_token: 'secret' },
       };
+      req.tenantId = 'request-tenant';
       const requestBody = {
         ...req.body,
         ephemeralAgent: { skills: true },
@@ -658,7 +882,10 @@ describe('createResponse controller', () => {
       expect(mockCreateAgentRunEnvelope).toHaveBeenCalledWith(
         expect.objectContaining({
           protocol: 'responses',
-          principal: req.user,
+          principal: {
+            ...req.user,
+            tenantId: 'request-tenant',
+          },
           payload: requestBody,
           requestId: expect.any(String),
           receivedAt: expect.any(Number),
@@ -669,6 +896,9 @@ describe('createResponse controller', () => {
       );
       expect(initializeAgent).toHaveBeenCalledWith(
         expect.objectContaining({
+          runtime: expect.objectContaining({
+            turnStartedAt: mockCreateAgentRunEnvelope.mock.results[0].value.receivedAt,
+          }),
           requestBody: {
             messageId: 'resp_mock-123',
             conversationId: expect.any(String),
@@ -676,6 +906,7 @@ describe('createResponse controller', () => {
         }),
         expect.anything(),
       );
+      expect(req.turnStartedAt).toBe(mockCreateAgentRunEnvelope.mock.results[0].value.receivedAt);
       expect(req.body).not.toBe(requestBody);
       expect(req.body).toEqual(requestBody);
       expect(JSON.stringify(mockCreateAgentRunEnvelope.mock.results[0].value)).not.toContain(
@@ -1636,46 +1867,73 @@ describe('createResponse controller', () => {
   });
 
   describe('remote-agent file authorization', () => {
-    it('threads the remote-agent permission boundary through initialization and tool loading', async () => {
-      const { initializeAgent, createToolExecuteHandler } = require('@librechat/api');
-      const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
-      const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
+    it.each([false, true])(
+      'threads the remote-agent permission boundary through initialization and tool loading (stream=%s)',
+      async (stream) => {
+        const { initializeAgent, createToolExecuteHandler } = require('@librechat/api');
+        const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
+        const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 
-      await createResponse(req, res);
+        req.config.endpoints.agents.backgroundTasks = { ordinaryToolCancellation: true };
+        req.body.stream = stream;
+        await createResponse(req, res);
 
-      const [initializeParams, dbMethods] = initializeAgent.mock.calls.at(-1);
-      const filterParams = {
-        files: [{ file_id: 'owner-file', user: 'agent-owner' }],
-        userId: 'user-123',
-        role: 'USER',
-        agentId: 'agent-123',
-      };
-      await dbMethods.filterFilesByAgentAccess(filterParams);
-      expect(filterFilesByAgentAccess).toHaveBeenLastCalledWith({
-        ...filterParams,
-        resourceType: ResourceType.REMOTE_AGENT,
-      });
+        const [initializeParams, dbMethods] = initializeAgent.mock.calls.at(-1);
+        const filterParams = {
+          files: [{ file_id: 'owner-file', user: 'agent-owner' }],
+          userId: 'user-123',
+          role: 'USER',
+          agentId: 'agent-123',
+        };
+        await dbMethods.filterFilesByAgentAccess(filterParams);
+        expect(filterFilesByAgentAccess).toHaveBeenLastCalledWith({
+          ...filterParams,
+          resourceType: ResourceType.REMOTE_AGENT,
+        });
 
-      await initializeParams.loadTools({
-        agentId: 'agent-123',
-        tools: ['file_search'],
-        provider: 'anthropic',
-        model: 'claude-3',
-        tool_resources: { file_search: { file_ids: ['owner-file'] } },
-      });
-      expect(loadAgentTools).toHaveBeenLastCalledWith(
-        expect.objectContaining({ agentResourceType: ResourceType.REMOTE_AGENT }),
-      );
+        await initializeParams.loadTools({
+          agentId: 'agent-123',
+          tools: ['file_search'],
+          provider: 'anthropic',
+          model: 'claude-3',
+          tool_resources: { file_search: { file_ids: ['owner-file'] } },
+        });
+        expect(loadAgentTools).toHaveBeenLastCalledWith(
+          expect.objectContaining({ agentResourceType: ResourceType.REMOTE_AGENT }),
+        );
 
-      const toolExecuteOptions = createToolExecuteHandler.mock.calls.at(-1)[0];
-      await toolExecuteOptions.loadTools(['file_search'], 'agent-123');
-      expect(loadToolsForExecution).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          agentResourceType: ResourceType.REMOTE_AGENT,
-          requestBody: initializeParams.requestBody,
-        }),
-      );
-    });
+        const toolExecuteOptions = createToolExecuteHandler.mock.calls.at(-1)[0];
+        expect(toolExecuteOptions.ordinaryToolCancellation).toBe(true);
+        expect(toolExecuteOptions.runSignal).toBe(mockExecution.signal);
+        expect(toolExecuteOptions.foregroundRunId).toBe(initializeParams.requestBody.messageId);
+        const effectiveSignal = new AbortController().signal;
+        await toolExecuteOptions.loadTools(
+          ['file_search'],
+          'agent-123',
+          undefined,
+          undefined,
+          effectiveSignal,
+        );
+        expect(loadToolsForExecution).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentResourceType: ResourceType.REMOTE_AGENT,
+            requestBody: initializeParams.requestBody,
+            signal: effectiveSignal,
+          }),
+        );
+        mockExecution.abort();
+        await toolExecuteOptions.loadTools(
+          ['file_search'],
+          'agent-123',
+          undefined,
+          undefined,
+          undefined,
+        );
+        expect(loadToolsForExecution).toHaveBeenLastCalledWith(
+          expect.objectContaining({ signal: undefined }),
+        );
+      },
+    );
   });
 
   describe('token usage recording - non-streaming', () => {
@@ -2003,6 +2261,70 @@ describe('createResponse controller', () => {
           fileAuthoringToolNames: ['create_file', 'edit_file'],
         },
       });
+    });
+  });
+
+  describe('file search role gating', () => {
+    const setCapabilities = (capabilities) => {
+      req.config.endpoints.agents.capabilities = capabilities;
+    };
+
+    it('reports file search available when the capability and the grant agree', async () => {
+      const { initializeAgent } = require('@librechat/api');
+      setCapabilities(['file_search']);
+
+      await createResponse(req, res);
+
+      expect(initializeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ fileSearchAvailable: true }),
+        expect.anything(),
+      );
+    });
+
+    /** `initializeAgent` re-hydrates prior-turn `file_search` files from this
+     *  flag, so a denied role must reach it — dropping the tool downstream still
+     *  leaves the files read, their usage bumped and their resources primed. */
+    it('withholds it when the role is denied FILE_SEARCH', async () => {
+      const { initializeAgent, resolveToolRoleGrants } = require('@librechat/api');
+      resolveToolRoleGrants.mockResolvedValueOnce({ runCode: true, fileSearch: false });
+      setCapabilities(['file_search']);
+
+      await createResponse(req, res);
+
+      expect(initializeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ fileSearchAvailable: false }),
+        expect.anything(),
+      );
+    });
+
+    /** Both flags are false without their capability, so the role read would be
+     *  pure load on every request. */
+    it('reads no role at all when neither capability is enabled', async () => {
+      const { initializeAgent, resolveToolRoleGrants } = require('@librechat/api');
+      setCapabilities([]);
+
+      await createResponse(req, res);
+
+      expect(resolveToolRoleGrants).not.toHaveBeenCalled();
+      expect(initializeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ fileSearchAvailable: false, codeEnvAvailable: false }),
+        expect.anything(),
+      );
+    });
+
+    /** One lookup answers both grants, so enabling either capability pays for
+     *  the other's pairing too. */
+    it('pairs both flags from a single role read', async () => {
+      const { initializeAgent, resolveToolRoleGrants } = require('@librechat/api');
+      setCapabilities(['file_search', 'execute_code']);
+
+      await createResponse(req, res);
+
+      expect(resolveToolRoleGrants).toHaveBeenCalledTimes(1);
+      expect(initializeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ fileSearchAvailable: true, codeEnvAvailable: true }),
+        expect.anything(),
+      );
     });
   });
 });

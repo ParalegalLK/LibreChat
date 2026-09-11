@@ -18,6 +18,10 @@ const {
   exemptAgentTriggerFromIpLimiter,
   captureScheduleFireContext,
   exemptFromUserLimiter: exemptScheduleFromUserLimiter,
+  detectGenerationRetry,
+  isConfirmedGenerationRetry,
+  generationRetryProbeLimiter,
+  generationRetryLimiter,
 } = require('@librechat/api');
 const { createSseStreamTelemetry } = require('@librechat/api/telemetry');
 const { logger } = require('@librechat/data-schemas');
@@ -32,6 +36,11 @@ const {
 } = require('~/server/middleware');
 const SteerController = require('~/server/controllers/agents/steer');
 const {
+  AgentQueuedTurnEnqueueController,
+  AgentQueuedTurnListController,
+  AgentQueuedTurnCancelController,
+} = require('~/server/controllers/agents/queuedTurns');
+const {
   GENERATION_PROTOCOL_HEADER,
   GENERATION_PROTOCOL_V2,
   getRequestedGenerationProtocol,
@@ -45,6 +54,8 @@ const {
   acknowledgeScheduledStopPersistence,
 } = require('~/server/services/Schedules');
 const responses = require('./responses');
+const management = require('./management');
+const skills = require('./skills');
 const openai = require('./openai');
 const { v1 } = require('./v1');
 const chat = require('./chat');
@@ -110,6 +121,14 @@ const router = express.Router();
  * @see https://openresponses.org/specification
  */
 router.use('/v1/responses', responses);
+
+/**
+ * Machine-authenticated Agent Management routes.
+ * Mounted before the catch-all execution router so management requests cannot
+ * inherit execution authentication or API-key fallback behavior.
+ */
+router.use('/v1/agents', management);
+router.use('/v1/skills', skills);
 
 /**
  * OpenAI-compatible API routes (API key authentication handled in route file)
@@ -224,7 +243,12 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     logger.warn(`[AgentStream] Refusing stream with invalid generation identity: ${streamId}`);
     return sendGenerationJson(res, 403, { error: 'Unauthorized' }, requestProtocolVersion);
   }
-  const streamTelemetry = createSseStreamTelemetry({ req, res, streamId, isResume });
+  const streamTelemetry = createSseStreamTelemetry({
+    req,
+    res,
+    streamId,
+    isResume,
+  });
 
   res.setHeader('Content-Encoding', 'identity');
   res.setHeader('Content-Type', 'text/event-stream');
@@ -379,7 +403,9 @@ router.get('/chat/stream/:streamId', async (req, res) => {
           final: true,
           reconcile: true,
           reconcileReason: generationReplaced ? 'generation_replaced' : 'terminal_payload_missing',
-          ...(expectedGenerationTerminal && { terminalStatus: currentJob.status }),
+          ...(expectedGenerationTerminal && {
+            terminalStatus: currentJob.status,
+          }),
           generationCreatedAt: authorizedGenerationCreatedAt,
           conversation: {
             conversationId: currentJob?.conversationId ?? job.conversationId ?? streamId,
@@ -747,6 +773,9 @@ router.post('/chat/abort', configMiddleware, async (req, res, next) => {
               // Source from the job: the stop request does not carry the
               // original temporary-chat flag.
               isTemporary: jobData?.isTemporary ?? req?.body?.isTemporary,
+              expiredAt: jobData?.retentionExpiresAt
+                ? new Date(jobData.retentionExpiresAt)
+                : undefined,
               interfaceConfig: req?.config?.interfaceConfig,
             };
             const requestMessage = {
@@ -778,6 +807,11 @@ router.post('/chat/abort', configMiddleware, async (req, res, next) => {
                 jobData.userSubmittedMessageFieldPaths.length > 0 && {
                   userSubmittedMessageFieldPaths: jobData.userSubmittedMessageFieldPaths,
                 }),
+              /** The run published its compact context meta onto the job ahead
+               * of each model call; the stopped response must carry it so the
+               * next turn seeds the same tiers. A job with none unsets what an
+               * earlier pause stored on this row, since omission would keep it. */
+              contextMeta: jobData.contextMeta ?? null,
               user: userId,
             };
 
@@ -971,7 +1005,9 @@ router.post('/chat/abort', configMiddleware, async (req, res, next) => {
         // Steers that never reached an injection boundary — restored client-side
         // as queued chips so the user's words aren't dropped with the abort.
         ...(!abortResult.persistenceFailed &&
-          abortResult.pendingSteers?.length > 0 && { pendingSteers: abortResult.pendingSteers }),
+          abortResult.pendingSteers?.length > 0 && {
+            pendingSteers: abortResult.pendingSteers,
+          }),
       });
     }
 
@@ -1072,17 +1108,61 @@ router.post(
   SteerController.SteerArmController,
 );
 
+router.post(
+  '/chat/queued-turns',
+  configMiddleware,
+  ...steerLimiters,
+  createMessageFilterPii({
+    getConfig: (req) => req.config?.messageFilter?.pii,
+    getFilters: (req) => req.config?.filters,
+    getFiles,
+  }),
+  moderateText,
+  AgentQueuedTurnEnqueueController,
+);
+/** Synchronizing durable queue state is read-only and polled while work is
+ * pending. It must not consume the model-submission admission budget. */
+router.get('/chat/queued-turns', configMiddleware, AgentQueuedTurnListController);
+router.delete(
+  '/chat/queued-turns/:queuedTurnId',
+  configMiddleware,
+  ...steerLimiters,
+  AgentQueuedTurnCancelController,
+);
+
 router.use('/', v1);
 
 const chatRouter = express.Router();
+const useMessageIpLimiter = isEnabled(LIMIT_MESSAGE_IP);
+const useMessageUserLimiter = isEnabled(LIMIT_MESSAGE_USER);
 chatRouter.use(configMiddleware);
+if (useMessageIpLimiter || useMessageUserLimiter) {
+  chatRouter.use(
+    unless(
+      (req) => exemptAgentTriggerFromIpLimiter(req) || exemptScheduleFromUserLimiter(req),
+      generationRetryProbeLimiter,
+    ),
+  );
+  chatRouter.use(detectGenerationRetry);
+  chatRouter.use(
+    unless(
+      (req) => exemptAgentTriggerFromIpLimiter(req) || exemptScheduleFromUserLimiter(req),
+      generationRetryLimiter,
+    ),
+  );
+}
 
-if (isEnabled(LIMIT_MESSAGE_IP)) {
+if (useMessageIpLimiter) {
   chatRouter.use(unless(exemptAgentTriggerFromIpLimiter, messageIpLimiter));
 }
 
-if (isEnabled(LIMIT_MESSAGE_USER)) {
-  chatRouter.use(unless(exemptScheduleFromUserLimiter, messageUserLimiter));
+if (useMessageUserLimiter) {
+  chatRouter.use(
+    unless(
+      (req) => exemptScheduleFromUserLimiter(req) || isConfirmedGenerationRetry(req),
+      messageUserLimiter,
+    ),
+  );
 }
 
 chatRouter.use('/', chat);

@@ -36,6 +36,9 @@ export function sanitizeJobMetadata(metadata: Partial<GenerationJobMetadata>): J
   if (metadata.isTemporary !== undefined) {
     patch.isTemporary = metadata.isTemporary;
   }
+  if (metadata.retentionExpiresAt !== undefined) {
+    patch.retentionExpiresAt = metadata.retentionExpiresAt;
+  }
   if (metadata.agentEventDeliveryKey) {
     patch.agentEventDeliveryKey = metadata.agentEventDeliveryKey;
   }
@@ -103,6 +106,12 @@ export function sanitizeJobMetadata(metadata: Partial<GenerationJobMetadata>): J
   }
   if (metadata.activityPhaseSnapshot) {
     patch.activityPhaseSnapshot = metadata.activityPhaseSnapshot;
+  }
+  if (metadata.compactionSemanticIndex) {
+    patch.compactionSemanticIndex = metadata.compactionSemanticIndex;
+  }
+  if (metadata.contextMeta) {
+    patch.contextMeta = metadata.contextMeta;
   }
   return patch;
 }
