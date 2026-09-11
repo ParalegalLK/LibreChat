@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRecoilValue } from 'recoil';
 import { Progress, Spinner } from '@librechat/client';
 import { ContentTypes, EModelEndpoint, isAgentsEndpoint } from 'librechat-data-provider';
@@ -10,10 +10,29 @@ import store from '~/store';
 
 type AnalysisPhase = 'idle' | 'waiting' | 'working' | 'done';
 
-const TICK_MS = 400;
 const HIDE_DELAY_MS = 600;
-const CREEP_RATE = 0.12;
-const PHASE_CEILING: Record<'waiting' | 'working', number> = { waiting: 35, working: 92 };
+
+// Step-based progress: each step has a label and the % it represents
+const PROGRESS_STEPS = [
+  { label: 'Preparing document . . .', percent: 5 },
+  { label: 'Analyzing text . . .', percent: 15 },
+  { label: 'Processing your document . . .', percent: 25 },
+  { label: 'Working on your translation . . .', percent: 35 },
+  { label: 'Your content is getting ready . . .', percent: 45 },
+  { label: 'Translating your text . . .', percent: 55 },
+  { label: 'Just a moment longer . . .', percent: 65 },
+  { label: 'Crafting your translation . . .', percent: 72 },
+  { label: 'Processing your document . . .', percent: 79 },
+  { label: 'Working on your translation . . .', percent: 84 },
+  { label: 'Your content is getting ready . . .', percent: 88 },
+  { label: 'Just a moment longer . . .', percent: 91 },
+  { label: 'Crafting your translation . . .', percent: 94 },
+  { label: 'Almost ready for you . . .', percent: 96 },
+  { label: 'Finalizing output . . .', percent: 98 },
+];
+
+// How long each step stays visible (ms)
+const STEP_DURATION_MS = 2800;
 
 const ACTIVITY_PART_TYPES = new Set<string>([
   ContentTypes.THINK,
@@ -31,12 +50,8 @@ const findTurnUserMessage = (
   latestMessage: TMessage | null,
   messages: TMessage[] | undefined,
 ): TMessage | undefined => {
-  if (!latestMessage) {
-    return undefined;
-  }
-  if (latestMessage.isCreatedByUser) {
-    return latestMessage;
-  }
+  if (!latestMessage) return undefined;
+  if (latestMessage.isCreatedByUser) return latestMessage;
   return messages?.find((message) => message.messageId === latestMessage.parentMessageId);
 };
 
@@ -49,62 +64,63 @@ const resolvePhase = ({
   responseStarted: boolean;
   working: boolean;
 }): AnalysisPhase => {
-  if (!active) {
-    return 'idle';
-  }
-  if (responseStarted) {
-    return 'done';
-  }
+  if (!active) return 'idle';
+  if (responseStarted) return 'done';
   return working ? 'working' : 'waiting';
 };
 
 /**
- * Simulates a 0-100% analysis progress value from coarse streaming phases.
- * The value creeps asymptotically toward a per-phase ceiling so it never
- * stalls at a fixed number, snaps to 100% on completion, and resets to 0
- * once the bar has faded out.
+ * Steps through PROGRESS_STEPS at a fixed interval.
+ * Snaps to 100% when done, resets when idle.
  */
-function useAnalysisProgress(phase: AnalysisPhase): { progress: number; visible: boolean } {
-  const [progress, setProgress] = useState(0);
+function useAnalysisProgress(phase: AnalysisPhase): {
+  progress: number;
+  visible: boolean;
+  label: string;
+} {
+  const [stepIndex, setStepIndex] = useState(0);
   const [visible, setVisible] = useState(false);
+  const stepIndexRef = useRef(0);
 
   useEffect(() => {
     if (phase === 'idle') {
       setVisible(false);
-      setProgress(0);
+      setStepIndex(0);
+      stepIndexRef.current = 0;
       return;
     }
 
     if (phase === 'done') {
-      setProgress(100);
+      setStepIndex(PROGRESS_STEPS.length); // signals 100%
       const timeout = setTimeout(() => {
         setVisible(false);
-        setProgress(0);
+        setStepIndex(0);
+        stepIndexRef.current = 0;
       }, HIDE_DELAY_MS);
       return () => clearTimeout(timeout);
     }
 
     setVisible(true);
-    const ceiling = PHASE_CEILING[phase];
+
     const interval = setInterval(() => {
-      setProgress((current) =>
-        current >= ceiling
-          ? current
-          : Math.min(ceiling, current + (ceiling - current) * CREEP_RATE),
-      );
-    }, TICK_MS);
+      const next = stepIndexRef.current + 1;
+      if (next < PROGRESS_STEPS.length) {
+        stepIndexRef.current = next;
+        setStepIndex(next);
+      }
+      // If we've hit the last step, just stay there — don't loop
+    }, STEP_DURATION_MS);
+
     return () => clearInterval(interval);
   }, [phase]);
 
-  return { progress, visible };
+  const isDone = stepIndex >= PROGRESS_STEPS.length;
+  const progress = isDone ? 100 : PROGRESS_STEPS[stepIndex].percent;
+  const label = isDone ? 'Translation completed' : PROGRESS_STEPS[stepIndex].label;
+
+  return { progress, visible, label };
 }
 
-/**
- * Standalone "Analyzing..." indicator shown between the message list and the
- * composer while an agent or custom endpoint is processing a turn that carries
- * file attachments. It reads submission state only; it never touches the
- * message render tree.
- */
 export default function AIAnalysisProgressBar() {
   const localize = useLocalize();
   const { index, isSubmitting, getMessages } = useChatContext();
@@ -130,11 +146,9 @@ export default function AIAnalysisProgressBar() {
     working: hasActivityParts(latestMessage),
   });
 
-  const { progress, visible } = useAnalysisProgress(phase);
+  const { progress, visible, label } = useAnalysisProgress(phase);
 
-  if (!visible) {
-    return null;
-  }
+  if (!visible) return null;
 
   const percent = Math.round(progress);
 
@@ -150,7 +164,9 @@ export default function AIAnalysisProgressBar() {
         <div className="flex items-center justify-between gap-3 text-xs text-text-secondary">
           <span className="flex items-center gap-2" role="status" aria-live="polite">
             <Spinner className="shrink-0" size={14} />
-            {localize('com_ui_analyzing_attachment')}
+            <span className="truncate max-w-[200px] sm:max-w-[300px]">
+              {label}
+            </span>
           </span>
           <span className="tabular-nums" aria-hidden="true">
             {percent}%
@@ -159,7 +175,7 @@ export default function AIAnalysisProgressBar() {
         <Progress
           value={percent}
           className="mt-1.5 h-1.5"
-          aria-label={localize('com_ui_analyzing_attachment_progress', { percent })}
+          aria-label={label}
         />
       </div>
     </div>
