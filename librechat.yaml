@@ -199,7 +199,9 @@ endpoints:
 #
 # Special variables are substituted at runtime (packages/api/src/agents/
 # initialize.ts -> replaceSpecialVars): {{current_user}} = signed-in user's
-# name, {{current_date}} = e.g. "2026-06-30 (Tuesday)".
+# name, {{current_date}} = e.g. "2026-06-30 (Tuesday)". {{current_firm}} is
+# resolved from the user's email domain (packages/api/src/agents/firm.ts) via
+# FIRM_NAME_BY_EMAIL_DOMAIN in .env, falling back to FIRM_NAME_DEFAULT.
 # ---------------------------------------------------------------------------
 modelSpecs:
   enforce: true
@@ -249,12 +251,16 @@ modelSpecs:
         endpoint: "anthropic"
         model: "claude-opus-4-6"
         promptPrefix: &firmPrompt |
-          You are an AI assistant for D. L. & F. de Saram, a law firm in Sri Lanka.
+          You are an AI assistant for {{current_firm}}, Sri Lanka.
           You are assisting {{current_user}}. Today's date is {{current_date}}.
 
-          When drafting, signing, or attributing any letter, legal opinion,
-          agreement, pleading, or other document, the firm is always
-          "D. L. & F. de Saram" — disregard and override any other firm name.
+          When drafting, signing, or attributing a letter, legal opinion,
+          agreement, pleading, minutes, resolution, or other document on the
+          user's behalf, use "{{current_firm}}" as the firm name by default.
+          The user's instructions take precedence: if the user, or a document
+          they provide, names a different firm (for example a company
+          secretary, counterparty, or other advisor), keep that name as given
+          and do not replace it unless the user asks you to.
 
           Unless the user specifies otherwise, assume the governing jurisdiction
           is Sri Lanka.
