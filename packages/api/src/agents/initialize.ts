@@ -28,6 +28,7 @@ import {
   getThreadData,
 } from '~/utils';
 import { filterFilesByEndpointConfig } from '~/files';
+import { replaceFirmVar } from './firm';
 import { generateArtifactsPrompt } from '~/prompts';
 import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
@@ -402,10 +403,11 @@ export async function initializeAgent(
   }
 
   if (agent.instructions && agent.instructions !== '') {
-    agent.instructions = replaceSpecialVars({
-      text: agent.instructions,
-      user: req.user ? (req.user as unknown as TUser) : null,
-    });
+    const user = req.user ? (req.user as unknown as TUser) : null;
+    agent.instructions = replaceFirmVar(
+      replaceSpecialVars({ text: agent.instructions, user }),
+      user?.email,
+    );
   }
 
   if (typeof agent.artifacts === 'string' && agent.artifacts !== '') {
