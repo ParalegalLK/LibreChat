@@ -8,6 +8,11 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./librechat.yaml:/app/librechat.yaml
+      - ./skill:/app/skill
+    networks:
+      - default
+      - junior-drafter-network
+      - document-drafter-network
     depends_on:
       - mongodb
       - meilisearch
@@ -19,9 +24,9 @@ services:
     image: ${MONGODB_IMAGE:-mongo:8.2}
 
   firecrawl-allowlist-proxy:
-    # build:
-    #   context: ./firecrawl-allowlist-proxy
-    image: ghcr.io/paralegallk/firecrawl-allowlist-proxy:latest
+    build:
+      context: ./firecrawl-allowlist-proxy
+    # image: ghcr.io/paralegallk/firecrawl-allowlist-proxy:latest
     restart: always
     env_file:
       - .env
@@ -55,3 +60,9 @@ services:
 
 volumes:
   librechat-redis-data:
+
+networks:
+  junior-drafter-network:
+    external: true
+  document-drafter-network:
+    external: true

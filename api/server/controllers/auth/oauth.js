@@ -8,6 +8,7 @@ const {
 } = require('@librechat/api');
 const { syncUserEntraGroupMemberships } = require('~/server/services/PermissionService');
 const { setAuthTokens, setOpenIDAuthTokens } = require('~/server/services/AuthService');
+const { storeOpenIdTokens } = require('~/server/services/OpenIdTokenService');
 const getLogStores = require('~/cache/getLogStores');
 const { checkBan } = require('~/server/middleware');
 const { generateToken } = require('~/models');
@@ -36,16 +37,29 @@ function createOAuthHandler(redirectUri = domains.client) {
         return;
       }
 
-      /** Check if this is an admin panel redirect (cross-origin) */
+      /** Persist Asgardeo tokens so the client can later fetch a valid
+       *  provider access token (e.g. for drafter file downloads). */
+      if (req.user?.provider === 'openid' && req.user?.tokenset) {
+        await storeOpenIdTokens(req.user._id.toString(), req.user.tokenset);
+      }
+
+      /** Check if this is an admin panel redirect (cross-origin or same-origin subpath) */
       if (isAdminPanelRedirect(redirectUri, getAdminPanelUrl(), domains.client)) {
         /** For admin panel, generate exchange code instead of setting cookies */
         const cache = getLogStores(CacheKeys.ADMIN_OAUTH_EXCHANGE);
         const sessionExpiry = Number(process.env.SESSION_EXPIRY) || DEFAULT_SESSION_EXPIRY;
         const token = await generateToken(req.user, sessionExpiry);
 
-        /** Get refresh token from tokenset for OpenID users */
-        const refreshToken =
-          req.user.tokenset?.refresh_token || req.user.federatedTokens?.refresh_token;
+        let refreshToken;
+        if (req.user.provider === 'openid') {
+          if (isEnabled(process.env.OPENID_REUSE_TOKENS) === true) {
+            refreshToken =
+              req.user.tokenset?.refresh_token || req.user.federatedTokens?.refresh_token;
+          }
+        } else if (req.user.provider === 'google') {
+          refreshToken = req.authInfo?.refreshToken;
+        }
+        const expiresAt = Date.now() + sessionExpiry;
 
         const callbackUrl = new URL(redirectUri);
         const exchangeCode = await generateAdminExchangeCode(
@@ -55,6 +69,7 @@ function createOAuthHandler(redirectUri = domains.client) {
           refreshToken,
           callbackUrl.origin,
           req.pkceChallenge,
+          expiresAt,
         );
         callbackUrl.searchParams.set('code', exchangeCode);
         logger.info(`[OAuth] Admin panel redirect with exchange code for user: ${req.user.email}`);
@@ -68,9 +83,12 @@ function createOAuthHandler(redirectUri = domains.client) {
         isEnabled(process.env.OPENID_REUSE_TOKENS) === true
       ) {
         await syncUserEntraGroupMemberships(req.user, req.user.tokenset.access_token);
-        setOpenIDAuthTokens(req.user.tokenset, req, res, req.user._id.toString());
+        setOpenIDAuthTokens(req.user.tokenset, req, res, {
+          userId: req.user._id.toString(),
+          tenantId: req.user.tenantId,
+        });
       } else {
-        await setAuthTokens(req.user._id, res);
+        await setAuthTokens(req.user._id, res, null, req);
       }
       res.redirect(redirectUri);
     } catch (err) {

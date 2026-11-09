@@ -1,28 +1,45 @@
-import { Tools } from 'librechat-data-provider';
+import { buildWebSearchContext, buildWebSearchDynamicContext } from './web';
 
-import { buildWebSearchContext } from './web';
+jest.mock('librechat-data-provider', () => ({
+  Tools: { web_search: 'web_search' },
+  replaceSpecialVars: jest.fn(({ now }: { now?: string }) => now ?? 'NOW'),
+}));
 
-describe('buildWebSearchContext', () => {
-  it('should include the default web search context', () => {
-    const result = buildWebSearchContext();
+describe('web search context', () => {
+  it('keeps static context free of volatile date replacements', () => {
+    const context = buildWebSearchContext();
 
-    expect(result).toContain(`# \`${Tools.web_search}\`:`);
-    expect(result).toContain('Current Date & Time:');
-    expect(result).toContain('**CITATION FORMAT - UNICODE ESCAPE SEQUENCES ONLY:**');
-    expect(result).not.toContain('**PLANNER INSTRUCTIONS:**');
+    expect(context).toContain('web_search');
+    expect(context).not.toContain('NOW');
+    expect(context).not.toContain('{{iso_datetime}}');
   });
 
-  it('should include planner instructions when plannerPrompt is provided', () => {
+  it('guides the model to answer directly when a search is not warranted', () => {
+    const context = buildWebSearchContext();
+
+    expect(context).toContain('respond directly without searching');
+    expect(context).toContain('current, real-time, or otherwise beyond your own knowledge');
+  });
+
+  it('includes custom planner instructions when configured', () => {
     const prompt = 'Research the legal issue with official Sri Lanka government sources first.';
-    const result = buildWebSearchContext(prompt);
+    const context = buildWebSearchContext(prompt);
 
-    expect(result).toContain('**PLANNER INSTRUCTIONS:**');
-    expect(result).toContain(prompt);
+    expect(context).toContain('**PLANNER INSTRUCTIONS:**');
+    expect(context).toContain(prompt);
   });
 
-  it('should omit planner instructions when plannerPrompt is empty', () => {
-    const result = buildWebSearchContext('   ');
+  it('omits planner instructions when the configured prompt is empty', () => {
+    expect(buildWebSearchContext('   ')).not.toContain('**PLANNER INSTRUCTIONS:**');
+  });
 
-    expect(result).not.toContain('**PLANNER INSTRUCTIONS:**');
+  it('builds dynamic context from the supplied conversation anchor', () => {
+    const context = buildWebSearchDynamicContext('2024-01-02T03:04:05.000Z');
+    const secondContext = buildWebSearchDynamicContext('2024-01-02T03:04:05.000Z');
+
+    expect(context).toBe(
+      '# `web_search` Runtime Context\nConversation Date & Time: 2024-01-02T03:04:05.000Z',
+    );
+    expect(secondContext).toBe(context);
   });
 });

@@ -13,9 +13,18 @@ fileConfig:
       - "^application/vnd\\.ms-powerpoint$"
       - "^application/epub\\+zip$"
   endpoints:
+    # Uniform limits: 10 files per message, 50 MB per file, 512 MB combined per message.
+    # 'default' covers endpoints without their own entry, but anthropic/agents have
+    # hardcoded code defaults (512 MB per file) that shadow 'default', so they are
+    # overridden explicitly below.
+    default:
+      fileLimit: 10
+      fileSizeLimit: 50
+      totalSizeLimit: 512
     openAI:
       fileLimit: 10
       fileSizeLimit: 50
+      totalSizeLimit: 512
       supportedMimeTypes:
         - "application/pdf"
         - "text/.*"
@@ -24,14 +33,25 @@ fileConfig:
     custom:
       fileLimit: 10
       fileSizeLimit: 50
+      totalSizeLimit: 512
       supportedMimeTypes:
         - "application/pdf"
         - "text/.*"
         - "application/vnd.*"
         - "image/.*"
+    anthropic:
+      fileLimit: 10
+      fileSizeLimit: 50
+      totalSizeLimit: 512
+    agents:
+      fileLimit: 10
+      fileSizeLimit: 50
+      totalSizeLimit: 512
     paralegal.lk:
       disabled: true
     De Saram AI:
+      disabled: true
+    De Saram AI Drafter:
       disabled: true
     # agents:
     #   fileLimit: 10
@@ -59,13 +79,13 @@ speech:
       voices: ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
 
 interface:
-  runCode: false
-  endpointsMenu: true
-  # Hard-lock to modelSpecs: hide model/preset/parameter pickers so users
-  # cannot bypass the enforced firm system prompt (see modelSpecs.enforce below).
+  runCode: true
+  endpointsMenu: false
+  # Enforce modelSpecs and hide the model picker; preset and parameter controls
+  # remain available (see modelSpecs.enforce below).
   modelSelect: false
-  presets: false
-  parameters: false
+  presets: true
+  parameters: true
 
 webSearch:
   serperApiKey: "${SERPER_API_KEY}"
@@ -81,6 +101,8 @@ webSearch:
   scraperProvider: "firecrawl"
   rerankerType: "jina"
   safeSearch: 1
+  allowedAddresses:
+    - "firecrawl-allowlist-proxy:8787"
 
 ocr:
   strategy: "mistral_ocr"
@@ -95,32 +117,37 @@ endpoints:
   #   titleModel: "gpt-4o-mini"
   #   titleEndpoint: "openAI"
 
-  # agents:
+  agents:
   #   allowedProviders: ["openAI", "anthropic", "paralegal.lk", "dl-f-de-saram-chat"]
   #   recursionLimit: 150
   #   maxRecursionLimit: 200
-  #   capabilities:
-  #     - file_search
-  #     - web_search
-  #     - actions
-  #     - context
-  #     - tools
-  #     - chain
-  #     - ocr
+    capabilities:
+      - deferred_tools
+      - execute_code
+      - file_search
+      - web_search
+      - subagents
+      - actions
+      - context
+      - skills
+      - memory
+      - tools
+      - chain
+      - ocr
 
   custom:
     - name: "paralegal.lk"
       apiKey: "${RAG_API_KEY}"
       baseURL: "https://www.chat.paralegal.lk/talkapi/v1"
       models:
-        default: ["junior-silva-01"]
+        default: ["researcher-silva-2"]
         fetch: false
       titleConvo: true
       titleModel: "gpt-4o-mini"
       titleEndpoint: "openAI"
       summarize: false
-      modelDisplayLabel: "Junior Silva"
-      iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
+      modelDisplayLabel: "Researcher Silva"
+      iconURL: "/images/paralegal-lk.svg"
 
     - name: "De Saram AI"
       apiKey: "${DLF_DE_SARAM_API_KEY}"
@@ -135,6 +162,24 @@ endpoints:
       modelDisplayLabel: "Junior De Saram"
       iconURL: "/images/dsai-legal.jpeg"
 
+    # Second De Saram AI backend: the document drafter/formatter service
+    # (document-drafter repo), reached over the external document-drafter-network
+    # docker network. A custom endpoint has exactly one baseURL, so this is a
+    # separate endpoint entry, but it uses the same De Saram AI key and is
+    # shown under the De Saram AI group in the model menu (see modelSpecs).
+    - name: "De Saram AI Drafter"
+      apiKey: "${DLF_DE_SARAM_API_KEY}"
+      baseURL: "http://document-drafter:9124/v1"
+      models:
+        default: ["document-drafter-01-preview"]
+        fetch: false
+      titleConvo: true
+      titleModel: "gpt-4o-mini"
+      titleEndpoint: "openAI"
+      summarize: false
+      modelDisplayLabel: "Document Drafter"
+      iconURL: "/images/dsai-legal.jpeg"
+
 # ---------------------------------------------------------------------------
 # Model specs
 #
@@ -144,11 +189,16 @@ endpoints:
 #                   usable model MUST be listed here (a request with no valid
 #                   spec is rejected). Pairs with interface.modelSelect/presets/
 #                   parameters = false above.
-# prioritize: true -> the spec marked `default: true` auto-loads for new chats.
+# prioritize: true -> a spec auto-loads for new chats. With no spec marked
+#                   `default: true`, the client picks the user's last-used spec
+#                   (localStorage lastSelectedSpec), falling back to the first
+#                   spec in this list for first-time users. Do NOT add
+#                   `default: true` to any spec — it would force every new chat
+#                   to that spec instead of carrying over the last-used model.
 #
 # The firm system prompt is defined once as a YAML anchor (&firmPrompt) on the
 # first third-party spec and reused (*firmPrompt) on every other third-party
-# model. It is NOT applied to the in-house research agents (Junior Silva /
+# model. It is NOT applied to the in-house research agents (Researcher Silva /
 # Junior De Saram), which already operate under their own firm context.
 #
 # Group display order in the model menu follows the order groups first appear
@@ -156,7 +206,9 @@ endpoints:
 #
 # Special variables are substituted at runtime (packages/api/src/agents/
 # initialize.ts -> replaceSpecialVars): {{current_user}} = signed-in user's
-# name, {{current_date}} = e.g. "2026-06-30 (Tuesday)".
+# name, {{current_date}} = e.g. "2026-06-30 (Tuesday)". {{current_firm}} is
+# resolved from the user's email domain (packages/api/src/agents/firm.ts) via
+# FIRM_NAME_BY_EMAIL_DOMAIN in .env, falling back to FIRM_NAME_DEFAULT.
 # ---------------------------------------------------------------------------
 modelSpecs:
   enforce: true
@@ -166,134 +218,179 @@ modelSpecs:
     # No firm promptPrefix: these already run under their own firm context.
     - name: "junior-de-saram"
       label: "Junior De Saram"
-      default: true
       group: "De Saram AI"
       groupIcon: "/images/dsai-legal.jpeg"
       iconURL: "/images/dsai-legal.jpeg"
       showIconInMenu: false
+      hideBadgeRow: true
+      webSearch: false
+      fileSearch: false
+      skills: false
+      artifacts: false
       preset:
         endpoint: "De Saram AI"
         model: "junior-de-saram-01"
 
-    - name: "junior-silva"
-      label: "Junior Silva"
-      group: "paralegal.lk"
-      groupIcon: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
-      iconURL: "https://em-content.zobj.net/source/twitter/408/feather_1fab6.png"
+    - name: "de-saram-document-drafter"
+      label: "Document Drafter"
+      group: "De Saram AI"
+      groupIcon: "/images/dsai-legal.jpeg"
+      iconURL: "/images/dsai-legal.jpeg"
       showIconInMenu: false
+      hideBadgeRow: true
+      webSearch: false
+      fileSearch: false
+      skills: false
+      artifacts: false
+      preset:
+        endpoint: "De Saram AI Drafter"
+        model: "document-drafter-01-preview"
+        maxContextTokens: 252000
+
+    - name: "researcher-silva"
+      label: "Researcher Silva"
+      group: "paralegal.lk"
+      groupIcon: "paralegal"
+      iconURL: "paralegal"
+      showIconInMenu: false
+      hideBadgeRow: true
+      webSearch: false
+      fileSearch: false
+      skills: false
+      artifacts: false
       preset:
         endpoint: "paralegal.lk"
-        model: "junior-silva-01"
+        model: "researcher-silva-2"
 
     # ---------------------------- Anthropic ---------------------------
-    - name: "claude-opus-4-6"
-      label: "Claude Opus 4.6"
+    - name: "claude-opus-5-5"
+      label: "Claude Opus 5.5"
       group: "Anthropic"
       groupIcon: "anthropic"
       iconURL: "anthropic"
       showIconInMenu: false
       preset:
         endpoint: "anthropic"
-        model: "claude-opus-4-6"
+        model: "claude-opus-5-5"
+        maxContextTokens: 1000000
+        maxOutputTokens: 128000
+        thinking: true
+        effort: "medium"
         promptPrefix: &firmPrompt |
-          You are an AI assistant for D. L. & F. de Saram, a law firm in Sri Lanka.
+          You are an AI assistant for {{current_firm}}, Sri Lanka.
           You are assisting {{current_user}}. Today's date is {{current_date}}.
 
-          When drafting, signing, or attributing any letter, legal opinion,
-          agreement, pleading, or other document, the firm is always
-          "D. L. & F. de Saram" — disregard and override any other firm name.
+          When drafting, signing, or attributing a letter, legal opinion,
+          agreement, pleading, minutes, resolution, or other document on the
+          user's behalf, use "{{current_firm}}" as the firm name by default.
+          The user's instructions take precedence: if the user, or a document
+          they provide, names a different firm (for example a company
+          secretary, counterparty, or other advisor), keep that name as given
+          and do not replace it unless the user asks you to.
 
           Unless the user specifies otherwise, assume the governing jurisdiction
           is Sri Lanka.
 
-    - name: "claude-sonnet-5"
-      label: "Claude Sonnet 5"
+    - name: "claude-sonnet-5-5"
+      label: "Claude Sonnet 5.5"
       group: "Anthropic"
       groupIcon: "anthropic"
       iconURL: "anthropic"
       showIconInMenu: false
       preset:
         endpoint: "anthropic"
-        model: "claude-sonnet-5"
+        model: "claude-sonnet-5-5"
         maxContextTokens: 1000000
-        max_tokens: 128000
-        promptPrefix: *firmPrompt
-
-    - name: "claude-sonnet-4-6"
-      label: "Claude Sonnet 4.6"
-      group: "Anthropic"
-      groupIcon: "anthropic"
-      iconURL: "anthropic"
-      showIconInMenu: false
-      preset:
-        endpoint: "anthropic"
-        model: "claude-sonnet-4-6"
+        maxOutputTokens: 128000
+        thinking: true
+        effort: "high"
         promptPrefix: *firmPrompt
 
     # ----------------------------- OpenAI -----------------------------
-    - name: "gpt-5.1"
-      label: "GPT-5.1"
+    - name: "gpt-6.1-sol"
+      label: "GPT-6.1 Sol"
       group: "OpenAI"
       groupIcon: "openAI"
       iconURL: "openAI"
       showIconInMenu: false
       preset:
         endpoint: "openAI"
-        model: "gpt-5.1"
+        model: "gpt-6.1-sol"
+        maxContextTokens: 1050000
+        max_tokens: 128000
+        useResponsesApi: true
+        reasoning_effort: "medium"
         promptPrefix: *firmPrompt
 
-    - name: "gpt-4.1"
-      label: "GPT-4.1"
+    - name: "gpt-6.1-terra"
+      label: "GPT-6.1 Terra"
       group: "OpenAI"
       groupIcon: "openAI"
       iconURL: "openAI"
       showIconInMenu: false
       preset:
         endpoint: "openAI"
-        model: "gpt-4.1"
+        model: "gpt-6.1-terra"
+        maxContextTokens: 1050000
+        max_tokens: 128000
+        useResponsesApi: true
+        reasoning_effort: "none"
         promptPrefix: *firmPrompt
 
-    - name: "gpt-4o-mini"
-      label: "GPT-4o mini"
+    - name: "gpt-6-luna"
+      label: "GPT-6 Luna"
       group: "OpenAI"
       groupIcon: "openAI"
       iconURL: "openAI"
       showIconInMenu: false
       preset:
         endpoint: "openAI"
-        model: "gpt-4o-mini"
+        model: "gpt-6-luna"
+        maxContextTokens: 1050000
+        max_tokens: 128000
+        useResponsesApi: true
+        reasoning_effort: "none"
         promptPrefix: *firmPrompt
 
     # ----------------------------- Google -----------------------------
-    - name: "gemini-3.1-pro-preview"
-      label: "Gemini 3.1 Pro"
+    - name: "gemini-4-argon"
+      label: "Gemini 4 Argon"
       group: "Google"
       groupIcon: "google"
       iconURL: "google"
       showIconInMenu: false
       preset:
         endpoint: "google"
-        model: "gemini-3.1-pro-preview"
+        model: "gemini-4-argon"
+        maxContextTokens: 1048576
+        maxOutputTokens: 32768
+        thinkingLevel: "high"
         promptPrefix: *firmPrompt
 
-    - name: "gemini-3-flash-preview"
-      label: "Gemini 3 Flash"
+    - name: "gemini-3.8-flash"
+      label: "Gemini 3.8 Flash"
       group: "Google"
       groupIcon: "google"
       iconURL: "google"
       showIconInMenu: false
       preset:
         endpoint: "google"
-        model: "gemini-3-flash-preview"
+        model: "gemini-3.8-flash"
+        maxContextTokens: 1048576
+        maxOutputTokens: 65536
+        thinkingLevel: "medium"
         promptPrefix: *firmPrompt
 
-    - name: "gemini-3.1-flash-lite-preview"
-      label: "Gemini 3.1 Flash Lite"
+    - name: "gemini-3.5-flash-lite"
+      label: "Gemini 3.5 Flash-Lite"
       group: "Google"
       groupIcon: "google"
       iconURL: "google"
       showIconInMenu: false
       preset:
         endpoint: "google"
-        model: "gemini-3.1-flash-lite-preview"
+        model: "gemini-3.5-flash-lite"
+        maxContextTokens: 1048576
+        maxOutputTokens: 65536
+        thinkingLevel: "minimal"
         promptPrefix: *firmPrompt

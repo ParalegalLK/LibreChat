@@ -7,6 +7,19 @@ I run LibreChat (https://github.com/danny-avila/LibreChat) as a managed service 
 - Do not repeatedly ask for permission for the same safe read-only command pattern once approved; reuse stored prefix approvals.
 - Keep explicit approval for destructive or state-changing actions (for example deletes, resets, pruning, writes outside workspace, schema/data mutation, container/image removal).
 
+# Deployment Changelog (IMPORTANT)
+
+`DEPLOYMENT_CHANGELOG.md` tracks drift between the running `api` container and the
+`librechat:local` image (hot-patches applied without an image rebuild).
+
+- **After any hot-patch** (copying api files or a rebuilt `client/dist` into the running
+  container), add an entry under *Pending*: date, commit, files, how it was deployed,
+  what breaks on container recreate.
+- **Before recreating the container or building a new image**, read the *Pending*
+  section — recreation reverts every hot-patch listed there.
+- **After each image build/deploy**, run the *Next image build checklist* in that file
+  and move shipped entries to *Shipped*.
+
 # Common Commands
 
 ## User Management
