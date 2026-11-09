@@ -1203,6 +1203,60 @@ describe('initializeAgent — stable and dynamic instruction fields', () => {
     expect(result.additional_instructions).toBeUndefined();
   });
 
+  it.each([
+    {
+      field: 'stable',
+      instructions: 'You are helping {{current_user}} at {{current_firm}}.',
+      expected: 'You are helping Test User at Corporate Advisory Services (Private) Limited.',
+    },
+    {
+      field: 'dynamic',
+      instructions: 'You are helping {{current_user}} at {{current_firm}} on {{current_datetime}}.',
+      expected:
+        'You are helping Test User at Corporate Advisory Services (Private) Limited on 2024-01-15 13:30:00 -05:00 (Monday).',
+    },
+  ])(
+    'resolves the email-domain firm in $field instructions',
+    async ({ field, instructions, expected }) => {
+      jest.replaceProperty(process, 'env', {
+        ...process.env,
+        FIRM_NAME_DEFAULT: 'D. L. & F. de Saram',
+        FIRM_NAME_BY_EMAIL_DOMAIN:
+          'corporateadvisory.lk=Corporate Advisory Services (Private) Limited',
+      });
+      const { agent, req, res, loadTools, db } = createMocks();
+      agent.instructions = instructions;
+      req.user = {
+        id: 'user-1',
+        name: 'Test User',
+        email: 'test@CorporateAdvisory.lk',
+      } as never;
+      req.conversationCreatedAt = '2024-01-15T18:30:00.000Z';
+      req.body = { timezone: 'America/New_York' };
+
+      const result = await initializeAgent(
+        {
+          req,
+          res,
+          agent,
+          loadTools,
+          endpointOption: { endpoint: EModelEndpoint.agents },
+          allowedProviders: new Set([Providers.OPENAI]),
+          isInitialAgent: true,
+        },
+        db,
+      );
+
+      if (field === 'dynamic') {
+        expect(result.instructions).toBeUndefined();
+        expect(result.additional_instructions).toBe(expected);
+      } else {
+        expect(result.instructions).toBe(expected);
+        expect(result.additional_instructions).toBeUndefined();
+      }
+    },
+  );
+
   it('appends generated artifact guidance without replacing existing dynamic instructions', async () => {
     const { generateArtifactsPrompt } = jest.requireMock('~/prompts') as {
       generateArtifactsPrompt: jest.Mock;

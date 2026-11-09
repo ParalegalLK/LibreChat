@@ -5,6 +5,7 @@ const mockGenerateAdminExchangeCode = jest.fn();
 const mockSyncUserEntraGroupMemberships = jest.fn();
 const mockSetAuthTokens = jest.fn();
 const mockSetOpenIDAuthTokens = jest.fn();
+const mockStoreOpenIdTokens = jest.fn();
 const mockGetLogStores = jest.fn();
 const mockCheckBan = jest.fn();
 const mockGenerateToken = jest.fn();
@@ -33,6 +34,10 @@ jest.mock('~/server/services/PermissionService', () => ({
 jest.mock('~/server/services/AuthService', () => ({
   setAuthTokens: (...args) => mockSetAuthTokens(...args),
   setOpenIDAuthTokens: (...args) => mockSetOpenIDAuthTokens(...args),
+}));
+
+jest.mock('~/server/services/OpenIdTokenService', () => ({
+  storeOpenIdTokens: (...args) => mockStoreOpenIdTokens(...args),
 }));
 
 jest.mock(
@@ -106,6 +111,7 @@ describe('createOAuthHandler', () => {
 
     await handler(req, res, next);
 
+    expect(mockStoreOpenIdTokens).toHaveBeenCalledWith('user-123', req.user.tokenset);
     expect(mockGenerateAdminExchangeCode).toHaveBeenCalledWith(
       {},
       req.user,
@@ -160,6 +166,7 @@ describe('createOAuthHandler', () => {
 
     await handler(req, res, next);
 
+    expect(mockStoreOpenIdTokens).not.toHaveBeenCalled();
     expect(mockGenerateAdminExchangeCode).toHaveBeenCalledWith(
       {},
       req.user,

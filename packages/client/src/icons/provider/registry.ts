@@ -3,13 +3,13 @@ import type { ComponentType, SVGProps } from 'react';
 import GoogleMinimalIcon from '../../svgs/GoogleMinimalIcon';
 import CustomMinimalIcon from '../../svgs/CustomMinimalIcon';
 import AzureMinimalIcon from '../../svgs/AzureMinimalIcon';
+import ParalegalLKIcon from '../../svgs/ParalegalLKIcon';
 import AnthropicIcon from '../../svgs/AnthropicIcon';
 import MoonshotIcon from '../../svgs/MoonshotIcon';
 import BedrockIcon from '../../svgs/BedrockIcon';
 import GeminiIcon from '../../svgs/GeminiIcon';
 import GPTIcon from '../../svgs/GPTIcon';
 import XAIcon from '../../svgs/XAIcon';
-import ParalegalLKIcon from '../../svgs/ParalegalLKIcon';
 
 type ProviderArtComponent = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 

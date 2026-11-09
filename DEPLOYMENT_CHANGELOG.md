@@ -9,6 +9,31 @@ each pending entry's commit is in the build, then move it to *Shipped*.
 
 ---
 
+## Development upgrade source — 2026-11-09
+
+- **Upstream:** `main` / `upstream/main` at `6d499ba3c` integrated into
+  `desaram-ai-dev` by merge commit `7b0050ccc` (v0.8.8-rc1 upgrade).
+- **Firm prompt:** integrated the already-merged PR #18 (`e651f03f5`, including
+  `050c825d3`). Kept `firm.ts`, the email-domain firm prompt, and the
+  `claude-sonnet-5` model spec. Resolved `initialize.ts` by applying firm
+  substitution while retaining the upstream conversation date/time anchor,
+  request timezone, and stable/dynamic instruction handling. No additional
+  v0.8.5 firm change is required.
+- **Configuration:** `ce35615b4` commits the shared skill-directory mount, agent
+  capabilities, Firecrawl proxy allowlist, and UI/model feature settings.
+- **Local only:** deployment skill bundles under `skill/` remain untracked. The
+  development-only URL fallback in `MarkdownComponents.tsx` remains uncommitted;
+  the tracked fallback is `https://www.desaram.ai` for production. These rules are
+  recorded in `AGENTS.md`.
+- **Validation:** `npm ci`, all four shared-package builds, a production frontend
+  build in a temporary output directory, Docker Compose/YAML validation, and
+  176 tests across seven focused suites passed. The suites cover firm and
+  instruction resolution, web-search context, authentication, audio, and chat
+  attachments. Merge-resolution source files passed lint and formatting checks.
+- **Deployment:** this records source integration and validation. No image was
+  rebuilt or container restarted; the image and hot-patch records below remain
+  separate from the source upgrade.
+
 ## Current image
 
 | | |
@@ -87,9 +112,68 @@ each pending entry's commit is in the build, then move it to *Shipped*.
   De Saram AI junior backend). New container publishes host port 9124 — review
   firewall exposure.
 
+### 2026-08-26 — Stack recreated after `docker compose down`; all hot-patches re-applied
+- **What:** The stack had been taken down with `docker compose down` on 2026-08-25
+  ~15:30 UTC (containers removed, so every hot-patch above was gone). Brought back up
+  2026-08-26 ~02:57 UTC with `docker compose up -d`, which created fresh containers
+  from the 2026-07-06 image. Data was untouched (`data-node`, `meili_data_v1.12`,
+  `librechat_pgdata2` / redis volumes).
+- **Re-applied:** `docker cp` of the four drafter-auth api files from the
+  `fix/footnote-anchor-scroll` worktree (unchanged since `118983adb`) and the host
+  `client/dist` from 2026-08-14 00:24 (the paralegal-icon bundle, which supersedes
+  the earlier ones), then `docker compose restart api`.
+- **Verified:** `/health` 200; `/api/auth/openid-token` returns 401 (route present);
+  `ParalegalLKIcon` present in bundle; api attached to `document-drafter-network`
+  via the override file. Nothing new is pending beyond the entries above — this
+  entry only records that they had to be re-applied.
+- **Note:** `document-drafter` container (separate compose stack) was left stopped
+  (`docker stop document-drafter` in shell history); Document Drafter model won't
+  respond until it's started.
+
+### 2026-10-29 — Stack recreated again after `docker compose down`; all hot-patches re-applied
+- **What:** Same as 2026-08-26 — `docker compose down` + Docker restart recreated the
+  containers from the 2026-07-06 image, dropping every hot-patch above
+  (`/api/auth/openid-token` was 404, container served the July client bundle).
+- **Re-applied:** `docker cp` of the four drafter-auth api files (host copies identical
+  to `118983adb`); `rm -rf /app/client/dist` then `docker cp client/dist
+  LibreChat:/app/client/dist` (host bundle from 2026-08-14 00:24, `index.Cd_49uhw.js`,
+  includes the footnote fix + theme-aware paralegal.lk icon); `chown node:node`;
+  `docker compose restart api`.
+- **Verified:** `/health` 200; `/api/auth/openid-token` 401 (route present);
+  `ParalegalLKIcon` SVG path present in the deployed bundle; `/images/paralegal-lk.svg`
+  200; api attached to `document-drafter-network`; `document-drafter` container up.
+- **Reminder:** this keeps happening — building a new image (checklist below) removes
+  the need to re-apply after every `down`.
+
+### 2026-10-29 — `{{current_firm}}` prompt variable by email domain (branch `fix/current-firm-variable`)
+- **What:** Corporate Advisory users' minutes/letters were being rewritten to
+  "D. L. & F. de Saram" because the shared `&firmPrompt` said to "override any other
+  firm name". New `{{current_firm}}` variable resolved from the user's email domain;
+  firm prompt now uses it and defers to the user / their documents instead of overriding.
+- **Files:** `packages/api/src/agents/firm.ts` (+ `firm.spec.ts`, new),
+  `packages/api/src/agents/initialize.ts`; `librechat.yaml` (firm prompt; the host copy
+  also removes the `claude-sonnet-5` spec, see below); `.env` (`FIRM_NAME_DEFAULT`,
+  `FIRM_NAME_BY_EMAIL_DOMAIN`).
+- **Hot-patched:** `npm run build` in `packages/api` on host (no `packages/` drift vs
+  `1760d6df4`, so only this change); old container dist backed up, then
+  `rm -rf /app/packages/api/dist` + `docker cp packages/api/dist
+  LibreChat:/app/packages/api/dist` + `chown node:node`; Redis `FLUSHALL`;
+  `docker compose restart api`.
+- **Breaks on recreate:** ⚠️ the yaml/.env are host-mounted and survive, but the image's
+  api bundle doesn't know `{{current_firm}}` — the literal text `{{current_firm}}` is
+  sent to every third-party model. Re-copy `packages/api/dist` or revert the yaml prompt.
+
 ## Uncommitted host state (not in git at all)
 
-*(none as of 2026-08-19 — `librechat.yaml`, `docker-compose.override.yml`,
+- 2026-11-09 development checkout: the local deployment skill bundles and the
+  development-only presigned-URL fallback remain outside commits. The upgrade
+  retains `claude-sonnet-5`; the v0.8.5 host-only removal below is historical.
+
+- 2026-10-29: `claude-sonnet-5` spec removed from the host `librechat.yaml` only, on
+  purpose — the running v0.8.5 container can't serve it, and the spec stays in git for
+  the v0.8.8 upgrade. `.env` additions are host-only by design.
+
+*(previously none as of 2026-08-19 — `librechat.yaml`, `docker-compose.override.yml`,
 `MODEL_CONFIGURATION.md`, and the paralegal.lk icon changes are committed as
 `0fb3c4402` / `ef1061ba3` on `fix/footnote-anchor-scroll`.)*
 

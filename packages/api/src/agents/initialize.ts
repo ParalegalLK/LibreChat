@@ -100,6 +100,7 @@ import { filterFilesByEndpointConfig } from '~/files';
 import { generateArtifactsPrompt } from '~/prompts';
 import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
+import { replaceFirmVar } from './firm';
 
 /**
  * Fraction of context budget reserved as headroom when no explicit maxContextTokens is set.
@@ -1614,12 +1615,16 @@ export async function initializeAgent(
   }
 
   if (agent.instructions && agent.instructions !== '') {
-    const resolvedInstructions = replaceSpecialVars({
-      text: agent.instructions,
-      user: req.user ? (req.user as unknown as TUser) : null,
-      now: req.conversationCreatedAt,
-      timezone: req.body?.timezone,
-    });
+    const user = req.user ? (req.user as unknown as TUser) : null;
+    const resolvedInstructions = replaceFirmVar(
+      replaceSpecialVars({
+        text: agent.instructions,
+        user,
+        now: req.conversationCreatedAt,
+        timezone: req.body?.timezone,
+      }),
+      user?.email,
+    );
     if (hasTemporalSpecialVars(agent.instructions)) {
       agent.instructions = undefined;
       appendAdditionalInstructions(agent, resolvedInstructions);
