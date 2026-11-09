@@ -340,6 +340,15 @@ Then hard refresh browser and start new conversation.
 
 # Fork Maintenance Workflow
 
+## Development server changes that stay local
+- Do not commit local deployment skill bundles under `skill/`.
+- In `client/src/components/Chat/Messages/Content/MarkdownComponents.tsx`, keep the
+  committed `PRESIGNED_URL_API` fallback as `https://www.desaram.ai` for production.
+  This development server carries a local fallback to `https://dev.desaram.ai`;
+  leave that URL-only edit unstaged and uncommitted when committing or merging.
+  Preserve functional upstream changes to the component. An environment-specific
+  `VITE_PRESIGNED_URL_API` value can also override the fallback at build time.
+
 ## Git Remotes
 - `origin` → ParalegalLK/LibreChat (my fork)
 - `upstream` → danny-avila/LibreChat (original)

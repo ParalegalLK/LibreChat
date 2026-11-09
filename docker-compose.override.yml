@@ -8,6 +8,7 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./librechat.yaml:/app/librechat.yaml
+      - ./skill:/app/skill
     networks:
       - default
       - junior-drafter-network

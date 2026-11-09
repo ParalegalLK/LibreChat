@@ -79,13 +79,13 @@ speech:
       voices: ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
 
 interface:
-  runCode: false
-  endpointsMenu: true
-  # Hard-lock to modelSpecs: hide model/preset/parameter pickers so users
-  # cannot bypass the enforced firm system prompt (see modelSpecs.enforce below).
+  runCode: true
+  endpointsMenu: false
+  # Enforce modelSpecs and hide the model picker; preset and parameter controls
+  # remain available (see modelSpecs.enforce below).
   modelSelect: false
-  presets: false
-  parameters: false
+  presets: true
+  parameters: true
 
 webSearch:
   serperApiKey: "${SERPER_API_KEY}"
@@ -101,6 +101,8 @@ webSearch:
   scraperProvider: "firecrawl"
   rerankerType: "jina"
   safeSearch: 1
+  allowedAddresses:
+    - "firecrawl-allowlist-proxy:8787"
 
 ocr:
   strategy: "mistral_ocr"
@@ -115,18 +117,23 @@ endpoints:
   #   titleModel: "gpt-4o-mini"
   #   titleEndpoint: "openAI"
 
-  # agents:
+  agents:
   #   allowedProviders: ["openAI", "anthropic", "paralegal.lk", "dl-f-de-saram-chat"]
   #   recursionLimit: 150
   #   maxRecursionLimit: 200
-  #   capabilities:
-  #     - file_search
-  #     - web_search
-  #     - actions
-  #     - context
-  #     - tools
-  #     - chain
-  #     - ocr
+    capabilities:
+      - deferred_tools
+      - execute_code
+      - file_search
+      - web_search
+      - subagents
+      - actions
+      - context
+      - skills
+      - memory
+      - tools
+      - chain
+      - ocr
 
   custom:
     - name: "paralegal.lk"
@@ -213,6 +220,11 @@ modelSpecs:
       groupIcon: "/images/dsai-legal.jpeg"
       iconURL: "/images/dsai-legal.jpeg"
       showIconInMenu: false
+      hideBadgeRow: true
+      webSearch: false
+      fileSearch: false
+      skills: false
+      artifacts: false
       preset:
         endpoint: "De Saram AI"
         model: "junior-de-saram-01"
@@ -223,6 +235,11 @@ modelSpecs:
       groupIcon: "/images/dsai-legal.jpeg"
       iconURL: "/images/dsai-legal.jpeg"
       showIconInMenu: false
+      hideBadgeRow: true
+      webSearch: false
+      fileSearch: false
+      skills: false
+      artifacts: false
       preset:
         endpoint: "De Saram AI Drafter"
         model: "document-drafter-01-preview"
@@ -234,6 +251,11 @@ modelSpecs:
       groupIcon: "paralegal"
       iconURL: "paralegal"
       showIconInMenu: false
+      hideBadgeRow: true
+      webSearch: false
+      fileSearch: false
+      skills: false
+      artifacts: false
       preset:
         endpoint: "paralegal.lk"
         model: "researcher-silva-2"
