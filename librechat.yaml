@@ -263,15 +263,19 @@ modelSpecs:
         model: "researcher-silva-2"
 
     # ---------------------------- Anthropic ---------------------------
-    - name: "claude-opus-4-6"
-      label: "Claude Opus 4.6"
+    - name: "claude-opus-5-5"
+      label: "Claude Opus 5.5"
       group: "Anthropic"
       groupIcon: "anthropic"
       iconURL: "anthropic"
       showIconInMenu: false
       preset:
         endpoint: "anthropic"
-        model: "claude-opus-4-6"
+        model: "claude-opus-5-5"
+        maxContextTokens: 1000000
+        maxOutputTokens: 128000
+        thinking: true
+        effort: "medium"
         promptPrefix: &firmPrompt |
           You are an AI assistant for {{current_firm}}, Sri Lanka.
           You are assisting {{current_user}}. Today's date is {{current_date}}.
@@ -287,94 +291,106 @@ modelSpecs:
           Unless the user specifies otherwise, assume the governing jurisdiction
           is Sri Lanka.
 
-    - name: "claude-sonnet-5"
-      label: "Claude Sonnet 5"
+    - name: "claude-sonnet-5-5"
+      label: "Claude Sonnet 5.5"
       group: "Anthropic"
       groupIcon: "anthropic"
       iconURL: "anthropic"
       showIconInMenu: false
       preset:
         endpoint: "anthropic"
-        model: "claude-sonnet-5"
+        model: "claude-sonnet-5-5"
         maxContextTokens: 1000000
-        max_tokens: 128000
-        promptPrefix: *firmPrompt
-
-    - name: "claude-sonnet-4-6"
-      label: "Claude Sonnet 4.6"
-      group: "Anthropic"
-      groupIcon: "anthropic"
-      iconURL: "anthropic"
-      showIconInMenu: false
-      preset:
-        endpoint: "anthropic"
-        model: "claude-sonnet-4-6"
+        maxOutputTokens: 128000
+        thinking: true
+        effort: "high"
         promptPrefix: *firmPrompt
 
     # ----------------------------- OpenAI -----------------------------
-    - name: "gpt-5.1"
-      label: "GPT-5.1"
+    - name: "gpt-6.1-sol"
+      label: "GPT-6.1 Sol"
       group: "OpenAI"
       groupIcon: "openAI"
       iconURL: "openAI"
       showIconInMenu: false
       preset:
         endpoint: "openAI"
-        model: "gpt-5.1"
+        model: "gpt-6.1-sol"
+        maxContextTokens: 1050000
+        max_tokens: 128000
+        useResponsesApi: true
+        reasoning_effort: "medium"
         promptPrefix: *firmPrompt
 
-    - name: "gpt-4.1"
-      label: "GPT-4.1"
+    - name: "gpt-6.1-terra"
+      label: "GPT-6.1 Terra"
       group: "OpenAI"
       groupIcon: "openAI"
       iconURL: "openAI"
       showIconInMenu: false
       preset:
         endpoint: "openAI"
-        model: "gpt-4.1"
+        model: "gpt-6.1-terra"
+        maxContextTokens: 1050000
+        max_tokens: 128000
+        useResponsesApi: true
+        reasoning_effort: "none"
         promptPrefix: *firmPrompt
 
-    - name: "gpt-4o-mini"
-      label: "GPT-4o mini"
+    - name: "gpt-6-luna"
+      label: "GPT-6 Luna"
       group: "OpenAI"
       groupIcon: "openAI"
       iconURL: "openAI"
       showIconInMenu: false
       preset:
         endpoint: "openAI"
-        model: "gpt-4o-mini"
+        model: "gpt-6-luna"
+        maxContextTokens: 1050000
+        max_tokens: 128000
+        useResponsesApi: true
+        reasoning_effort: "none"
         promptPrefix: *firmPrompt
 
     # ----------------------------- Google -----------------------------
-    - name: "gemini-3.1-pro-preview"
-      label: "Gemini 3.1 Pro"
+    - name: "gemini-4-argon"
+      label: "Gemini 4 Argon"
       group: "Google"
       groupIcon: "google"
       iconURL: "google"
       showIconInMenu: false
       preset:
         endpoint: "google"
-        model: "gemini-3.1-pro-preview"
+        model: "gemini-4-argon"
+        maxContextTokens: 1048576
+        maxOutputTokens: 32768
+        thinkingLevel: "high"
         promptPrefix: *firmPrompt
 
-    - name: "gemini-3-flash-preview"
-      label: "Gemini 3 Flash"
+    - name: "gemini-3.8-flash"
+      label: "Gemini 3.8 Flash"
       group: "Google"
       groupIcon: "google"
       iconURL: "google"
       showIconInMenu: false
       preset:
         endpoint: "google"
-        model: "gemini-3-flash-preview"
+        model: "gemini-3.8-flash"
+        maxContextTokens: 1048576
+        maxOutputTokens: 65536
+        thinkingLevel: "medium"
         promptPrefix: *firmPrompt
 
-    - name: "gemini-3.1-flash-lite-preview"
-      label: "Gemini 3.1 Flash Lite"
+    - name: "gemini-3.5-flash-lite"
+      label: "Gemini 3.5 Flash-Lite"
       group: "Google"
       groupIcon: "google"
       iconURL: "google"
       showIconInMenu: false
       preset:
         endpoint: "google"
-        model: "gemini-3.1-flash-lite-preview"
+        model: "gemini-3.5-flash-lite"
+        maxContextTokens: 1048576
+        maxOutputTokens: 65536
+        thinkingLevel: "minimal"
         promptPrefix: *firmPrompt

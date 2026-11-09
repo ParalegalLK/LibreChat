@@ -1,7 +1,7 @@
 # Memo: Configuring Models in `librechat.yaml`
 
 **Audience:** ops / anyone maintaining the desaram.ai LibreChat deployment
-**Last updated:** 2026-07-07
+**Last updated:** 2026-11-09
 **Reference implementation:** the live `librechat.yaml` in this repo
 
 This memo explains how we configure models in `librechat.yaml`: custom (in-house)
@@ -9,6 +9,44 @@ endpoints, enforced firm system prompts, and provider grouping so a single icon
 appears at the provider level in the model menu.
 
 ---
+
+## Current replacement models (2026-11-09)
+
+The active menu in `librechat.yaml` uses these explicit token limits:
+
+| Replacement | `maxContextTokens` | Maximum output | Preset output field |
+|---|---:|---:|---|
+| `gpt-6.1-sol` | 1,050,000 | 128,000 | `max_tokens` |
+| `gpt-6.1-terra` | 1,050,000 | 128,000 | `max_tokens` |
+| `gpt-6-luna` | 1,050,000 | 128,000 | `max_tokens` |
+| `claude-opus-5-5` | 1,000,000 | 128,000 | `maxOutputTokens` |
+| `claude-sonnet-5-5` | 1,000,000 | 128,000 | `maxOutputTokens` |
+| `gemini-4-argon` | 1,048,576 | 32,768 | `maxOutputTokens` |
+| `gemini-3.8-flash` | 1,048,576 | 65,536 | `maxOutputTokens` |
+| `gemini-3.5-flash-lite` | 1,048,576 | 65,536 | `maxOutputTokens` |
+
+All three OpenAI presets enable `useResponsesApi` for tool compatibility. Sol
+uses `reasoning_effort: medium`; Terra and Luna use `none` to preserve the fast
+drafting/extraction roles of the models they replace. Opus and Sonnet use adaptive
+thinking with medium and high effort, respectively. Sonnet 4.6 has been removed
+from the menu and host provider allowlist. Google thinking levels are high for
+Argon, medium for Flash, and minimal for Flash-Lite.
+
+The configured provider keys returned all eight model IDs successfully. Argon's
+Models API response reports `outputTokenLimit: 32768`, so this deployment uses
+that verified limit even though the general model page describes a larger
+default synchronous maximum. Recheck provider metadata before raising it.
+
+Sources: [OpenAI Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra),
+[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna),
+[Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/overview),
+[Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview),
+[Argon](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon),
+[Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash), and
+[Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite).
+Provider model allowlists are updated in the host-only `.env`. The conversation
+title models are configured separately from these menu presets.
 
 ## 1. The two-layer model
 

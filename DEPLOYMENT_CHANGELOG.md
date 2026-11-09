@@ -163,11 +163,25 @@ each pending entry's commit is in the build, then move it to *Shipped*.
   api bundle doesn't know `{{current_firm}}` — the literal text `{{current_firm}}` is
   sent to every third-party model. Re-copy `packages/api/dist` or revert the yaml prompt.
 
+## Development model refresh — 2026-11-09
+
+- Replaced the eight requested menu models
+  in `librechat.yaml` and updated provider allowlists in the host-only `.env`.
+  Sonnet 5 is replaced by Sonnet 5.5; Sonnet 4.6 is removed from both the menu
+  and the provider allowlist.
+  Explicit context/output limits and provider-specific output fields are listed
+  in `MODEL_CONFIGURATION.md`. OpenAI presets use Responses; Terra and Luna use
+  no reasoning, and Opus/Sonnet 5.5 use adaptive thinking. All eight model IDs passed
+  provider metadata checks and all presets passed LibreChat schema/provider
+  configuration validation. The API was restarted, its mounted configuration
+  was verified, and the public health endpoint returned HTTP 200. These are
+  mounted configuration changes; the image remains built from `124ed15de`.
+
 ## Uncommitted host state (not in git at all)
 
 - 2026-11-09 development checkout: the local deployment skill bundles and the
-  development-only presigned-URL fallback remain outside commits. The upgrade
-  retains `claude-sonnet-5`; the v0.8.5 host-only removal below is historical.
+  development-only presigned-URL fallback remain outside commits. The current
+  Sonnet preset is `claude-sonnet-5-5`; the v0.8.5 host-only removal below is historical.
 
 - 2026-10-29: `claude-sonnet-5` spec removed from the host `librechat.yaml` only, on
   purpose — the running v0.8.5 container can't serve it, and the spec stays in git for
