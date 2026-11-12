@@ -1,4 +1,6 @@
 import { v4 } from 'uuid';
+import { useAtomValue } from 'jotai';
+import { piModelDraftAtom, piEffortDraftAtom } from '~/store/piModelPicker';
 import { cloneDeep } from 'lodash';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -215,6 +217,8 @@ export default function useChatFunctions({
   const getSender = useGetSender();
   const { user } = useAuthContext();
   const queryClient = useQueryClient();
+  const piModelDrafts = useAtomValue(piModelDraftAtom);
+  const piEffortDrafts = useAtomValue(piEffortDraftAtom);
   const setFilesToDelete = useSetFilesToDelete();
   const getEphemeralAgent = useGetEphemeralAgent();
   const isTemporary = useRecoilValue(store.isTemporary);
@@ -424,8 +428,23 @@ export default function useChatFunctions({
       conversationId === Constants.NEW_CONVO
         ? getRouteChatProjectId()
         : (conversation?.chatProjectId ?? null);
-    const conversationForPayload =
-      chatProjectId != null ? { ...(conversation ?? {}), chatProjectId } : (conversation ?? {});
+    const endpointConfig = queryClient.getQueryData<TEndpointsConfig>([QueryKeys.endpoints])?.[
+      endpoint ?? ''
+    ];
+    const piModelDraft = piModelDrafts[`${endpoint}:${conversationId ?? Constants.NEW_CONVO}`];
+    const piModel = endpointConfig?.piModelPicker === true
+      ? piModelDraft ?? conversation?.piModel ?? endpointConfig.piDefaultModel
+      : undefined;
+    const piEffortDraft = piEffortDrafts[`${endpoint}:${conversationId ?? Constants.NEW_CONVO}`];
+    const piEffort = endpointConfig?.piModelPicker === true
+      ? piEffortDraft ?? conversation?.piEffort ?? endpointConfig.piDefaultEffort ?? 'medium'
+      : undefined;
+    const conversationForPayload = {
+      ...(conversation ?? {}),
+      ...(chatProjectId != null ? { chatProjectId } : {}),
+      ...(piModel ? { piModel } : {}),
+      ...(piEffort ? { piEffort } : {}),
+    };
 
     // construct the query message
     // this is not a real messageId, it is used as placeholder before real messageId returned
@@ -682,8 +701,7 @@ export default function useChatFunctions({
     logger.log('message_state', initialResponse);
     const submission: TSubmission = {
       conversation: {
-        ...conversation,
-        ...(chatProjectId ? { chatProjectId } : {}),
+        ...conversationForPayload,
         conversationId,
       },
       endpointOption,

@@ -45,6 +45,7 @@ import CollapseChat from './CollapseChat';
 import QuoteButton from './QuoteButton';
 import StreamAudio from './StreamAudio';
 import TokenUsage from './TokenUsage';
+import PiModelPicker from '../Menus/Endpoints/PiModelPicker';
 import StopButton from './StopButton';
 import SendButton from './SendButton';
 import EditBadges from './EditBadges';
@@ -684,6 +685,7 @@ const ChatForm = memo(function ChatForm({
                   }
                 />
                 <div className="mx-auto flex" />
+                {index === 0 && <PiModelPicker />}
                 <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
                 {SpeechToText && (
                   <AudioRecorder

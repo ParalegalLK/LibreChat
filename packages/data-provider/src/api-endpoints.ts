@@ -170,6 +170,9 @@ export const aiEndpoints = () => `${BASE_URL}/api/endpoints`;
 
 export const tokenConfig = () => `${BASE_URL}/api/endpoints/token-config`;
 
+export const piModels = (endpoint: string) =>
+  `${BASE_URL}/api/endpoints/pi-models/${encodeURIComponent(endpoint)}`;
+
 export const models = () => `${BASE_URL}/api/models`;
 
 export const tokenizer = () => `${BASE_URL}/api/tokenizer`;

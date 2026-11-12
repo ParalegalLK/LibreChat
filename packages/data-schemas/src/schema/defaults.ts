@@ -15,6 +15,14 @@ export const conversationPreset: {
     type: StringConstructor;
     required: boolean;
   };
+  piModel: {
+    type: StringConstructor;
+    required: boolean;
+  };
+  piEffort: {
+    type: StringConstructor;
+    required: boolean;
+  };
   // for bedrock only
   region: {
     type: StringConstructor;
@@ -205,6 +213,14 @@ export const conversationPreset: {
   },
   // for azureOpenAI, openAI only
   model: {
+    type: String,
+    required: false,
+  },
+  piModel: {
+    type: String,
+    required: false,
+  },
+  piEffort: {
     type: String,
     required: false,
   },

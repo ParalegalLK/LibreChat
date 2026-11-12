@@ -55,6 +55,7 @@ export { dataService };
 import * as dataService from './data-service';
 /* provider identity */
 export * from './providers';
+export * from './pi-model-policy';
 /* general helpers */
 export * from './utils';
 export * from './actions';

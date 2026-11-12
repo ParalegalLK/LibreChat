@@ -304,6 +304,20 @@ export const getAIEndpoints = (): Promise<t.TEndpointsConfig> => {
   return request.get(endpoints.aiEndpoints());
 };
 
+export type PiModelInfo = {
+  provider: string;
+  id: string;
+  name: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  thinkingLevels?: string[];
+  images?: boolean;
+};
+
+export const getPiModels = (endpoint: string): Promise<{ models: PiModelInfo[] }> =>
+  request.get(endpoints.piModels(endpoint));
+
 export const getTokenConfig = (): Promise<t.TTokenConfigMap> => {
   return request.get(endpoints.tokenConfig());
 };

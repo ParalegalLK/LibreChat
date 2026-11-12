@@ -46,6 +46,8 @@ export interface IConversation extends Document {
   endpoint?: string;
   endpointType?: string;
   model?: string;
+  piModel?: string;
+  piEffort?: string;
   region?: string;
   chatGptLabel?: string;
   examples?: unknown[];

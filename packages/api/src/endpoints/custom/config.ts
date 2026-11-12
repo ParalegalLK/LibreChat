@@ -35,6 +35,9 @@ export function loadCustomEndpointsConfig(
         name: configName,
         iconURL,
         modelDisplayLabel,
+        piModelPicker,
+        piDefaultModel,
+        piDefaultEffort,
         customParams,
         provider,
       } = endpoint;
@@ -63,6 +66,9 @@ export function loadCustomEndpointsConfig(
         userProvideURL,
         customParams: resolvedCustomParams,
         modelDisplayLabel,
+        piModelPicker: piModelPicker === true && !userProvideURL && !isUserProvided(resolvedApiKey),
+        piDefaultModel: piModelPicker === true && !userProvideURL ? piDefaultModel : undefined,
+        piDefaultEffort: piModelPicker === true && !userProvideURL ? piDefaultEffort : undefined,
         iconURL,
         providerId: resolveEndpointProviderId({
           name,

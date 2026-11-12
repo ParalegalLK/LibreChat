@@ -1130,6 +1130,10 @@ export const endpointSchema = baseEndpointSchema.merge(
     }),
     iconURL: z.string().optional(),
     modelDisplayLabel: z.string().optional(),
+    piModelPicker: z.boolean().optional(),
+    piDefaultModel: z.string().optional(),
+    piDefaultEffort: z.string().optional(),
+    piAllowedModels: z.string().optional(),
     /**
      * Forces the endpoint to use a provider's native client / request format
      * instead of the default OpenAI-compatible client. Currently supports

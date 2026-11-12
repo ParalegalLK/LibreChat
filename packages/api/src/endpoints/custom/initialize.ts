@@ -5,6 +5,8 @@ import {
   EModelEndpoint,
   FetchTokenConfig,
   extractEnvVariable,
+  parsePiAllowedModels,
+  PI_THINKING_LEVELS,
 } from 'librechat-data-provider';
 import type { TEndpoint } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
@@ -307,6 +309,25 @@ export async function initializeCustom({
     endpointTokenConfig,
     !userProvidesURL,
   );
+  if (endpointConfig.piModelPicker === true && !userProvidesURL && !userProvidesKey) {
+    const selected = requestBody.endpointOption?.piModel ?? requestBody.piModel;
+    const piModel = typeof selected === 'string' && selected.length <= 256
+      ? selected
+      : endpointConfig.piDefaultModel;
+    const allowed = parsePiAllowedModels(extractEnvVariable(endpointConfig.piAllowedModels ?? ''));
+    if (!piModel || !allowed.has(piModel)) {
+      throw new Error('Selected Pi model is not allowed for this endpoint');
+    }
+    const requestedEffort = requestBody.endpointOption?.piEffort ?? requestBody.piEffort;
+    if (requestedEffort != null && !PI_THINKING_LEVELS.includes(requestedEffort as (typeof PI_THINKING_LEVELS)[number])) {
+      throw new Error('Invalid Pi thinking effort');
+    }
+    const piEffort = requestedEffort ?? endpointConfig.piDefaultEffort ?? 'medium';
+    if (!PI_THINKING_LEVELS.includes(piEffort as (typeof PI_THINKING_LEVELS)[number])) {
+      throw new Error('Invalid Pi thinking effort');
+    }
+    customOptions.headers = { ...endpointConfig.headers, 'X-Pi-Model': piModel, 'X-Pi-Thinking': piEffort };
+  }
 
   const clientOptions: Record<string, unknown> = {
     reverseProxyUrl: baseURL ?? null,

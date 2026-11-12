@@ -39,6 +39,15 @@ fileConfig:
         - "text/.*"
         - "application/vnd.*"
         - "image/.*"
+    Junior De Saram Pi:
+      fileLimit: 10
+      fileSizeLimit: 50
+      totalSizeLimit: 512
+      supportedMimeTypes:
+        - "application/pdf"
+        - "text/.*"
+        - "application/vnd.*"
+        - "image/.*"
     anthropic:
       fileLimit: 10
       fileSizeLimit: 50
@@ -149,6 +158,27 @@ endpoints:
       modelDisplayLabel: "Researcher Silva"
       iconURL: "/images/paralegal-lk.svg"
 
+    - name: "Junior De Saram Pi"
+      resendFiles: false
+      piModelPicker: true
+      piDefaultModel: "google/gemini-3.8-flash"
+      piDefaultEffort: "medium"
+      piAllowedModels: "${JUNIOR_SILVA_ALLOWED_MODELS}"
+      apiKey: "${JUNIOR_DE_SARAM_API_KEY}"
+      baseURL: "http://junior-de-saram:8160/v1"
+      headers:
+        X-LibreChat-Conversation-Id: "{{LIBRECHAT_BODY_CONVERSATIONID}}"
+        X-LibreChat-User-Id: "{{LIBRECHAT_USER_ID}}"
+      models:
+        default: ["junior-de-saram-pi"]
+        fetch: false
+      titleConvo: true
+      titleModel: "gpt-4o-mini"
+      titleEndpoint: "openAI"
+      summarize: false
+      modelDisplayLabel: "Junior De Saram Pi"
+      iconURL: "/images/dsai-legal.jpeg"
+
     - name: "De Saram AI"
       apiKey: "${DLF_DE_SARAM_API_KEY}"
       baseURL: "http://host.docker.internal:8123/v1"
@@ -216,6 +246,24 @@ modelSpecs:
   list:
     # ------------------- In-house research agents ---------------------
     # No firm promptPrefix: these already run under their own firm context.
+    - name: "junior-de-saram-pi"
+      label: "Junior De Saram Pi"
+      group: "De Saram AI"
+      groupIcon: "/images/dsai-legal.jpeg"
+      iconURL: "/images/dsai-legal.jpeg"
+      showIconInMenu: false
+      hideBadgeRow: true
+      webSearch: false
+      fileSearch: false
+      skills: false
+      artifacts: false
+      preset:
+        endpoint: "Junior De Saram Pi"
+        model: "junior-de-saram-pi"
+        maxContextTokens: 300000
+        resendFiles: false
+        fileTokenLimit: 100000
+
     - name: "junior-de-saram"
       label: "Junior De Saram"
       group: "De Saram AI"
