@@ -13,6 +13,22 @@ import store from '~/store';
 type PiModelInfo = Awaited<ReturnType<typeof dataService.getPiModels>>['models'][number];
 type PickerView = 'settings' | 'models' | 'effort';
 
+const providerLabels: Record<string, string> = {
+  anthropic: 'Anthropic',
+  google: 'Google',
+  openai: 'OpenAI',
+  'openai-codex': 'OpenAI Codex',
+  xai: 'xAI',
+};
+
+function providerLabel(provider: string): string {
+  return providerLabels[provider.toLowerCase()] ?? provider.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function effortLabel(level: string): string {
+  return level === 'xhigh' ? 'X-High' : level.charAt(0).toUpperCase() + level.slice(1);
+}
+
 /** One composer control with separate model and effort views. */
 export default function PiModelPicker() {
   const conversation = useRecoilValue(store.conversationByIndex(0));
@@ -66,12 +82,19 @@ export default function PiModelPicker() {
     return result;
   }, [data, search]);
 
-  if (!enabled) return null;
   const chosen = data?.models.find((model) => `${model.provider}/${model.id}` === selected);
   const label = chosen?.name ?? (selected ? selected.split('/').at(-1) : 'Select a model');
   const levels = chosen?.thinkingLevels?.length ? chosen.thinkingLevels : ['medium'];
   const savedEffort = effortDrafts[draftKey] ?? conversation?.piEffort ?? config?.piDefaultEffort ?? 'medium';
   const effort = levels.includes(savedEffort) ? savedEffort : levels.includes('medium') ? 'medium' : levels[0];
+
+  // A restored conversation may have an effort that the current model no longer supports.
+  useEffect(() => {
+    if (!enabled || !chosen?.thinkingLevels?.length || chosen.thinkingLevels.includes(savedEffort)) return;
+    setEffortDrafts((previous) => ({ ...previous, [draftKey]: effort }));
+  }, [enabled, chosen, savedEffort, draftKey, effort, setEffortDrafts]);
+
+  if (!enabled) return null;
 
   const selectModel = (model: PiModelInfo) => {
     setModelDrafts((previous) => ({ ...previous, [draftKey]: `${model.provider}/${model.id}` }));
@@ -125,7 +148,7 @@ export default function PiModelPicker() {
               >
                 <span className="font-medium">Effort</span>
                 <span className="flex items-center gap-2 text-text-secondary">
-                  <span className="capitalize">{effort}</span>
+                  <span>{effortLabel(effort)}</span>
                   <ChevronRight className="size-4" aria-hidden="true" />
                 </span>
               </button>
@@ -157,7 +180,7 @@ export default function PiModelPicker() {
               {!isLoading && !isError && groups.size === 0 && <p className="px-2 py-2 text-text-secondary">No matching models</p>}
               {Array.from(groups, ([provider, models]) => (
                 <div key={provider}>
-                  <p className="px-2 py-1 text-xs font-medium text-text-secondary">{provider}</p>
+                  <p className="px-2 py-1 text-sm font-semibold text-text-secondary">{providerLabel(provider)}</p>
                   {models.map((model) => {
                     const reference = `${model.provider}/${model.id}`;
                     return (
@@ -167,7 +190,7 @@ export default function PiModelPicker() {
                         aria-pressed={selected === reference}
                         title={reference}
                         onClick={() => selectModel(model)}
-                        className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary"
+                        className="flex w-full items-center justify-between gap-2 rounded-lg py-2 pl-6 pr-2 text-left hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary"
                       >
                         <span className="min-w-0 break-words">{model.name}</span>
                         {selected === reference && <Check className="size-4 shrink-0" aria-hidden="true" />}
@@ -192,7 +215,7 @@ export default function PiModelPicker() {
             <h2 className="mb-1 text-base font-semibold">Thinking effort</h2>
             <p className="mb-5 break-words text-text-secondary">Model: {label}</p>
             <div className="mb-4 flex items-center justify-between gap-3">
-              <span>Effort</span><strong className="capitalize">{effort}</strong>
+              <span>Effort</span><strong>{effortLabel(effort)}</strong>
             </div>
             <Slider
               aria-label={`Thinking effort for ${label}`}
@@ -204,7 +227,7 @@ export default function PiModelPicker() {
               disabled={levels.length < 2}
             />
             <div className="mt-3 flex justify-between text-xs text-text-secondary">
-              <span className="capitalize">{levels[0]}</span><span className="capitalize">{levels.at(-1)}</span>
+              <span>{effortLabel(levels[0])}</span><span>{effortLabel(levels.at(-1) ?? levels[0])}</span>
             </div>
           </div>
         )}
