@@ -36,6 +36,8 @@ export type TEndpointOption = Pick<
   | 'endpoint'
   | 'endpointType'
   | 'model'
+  | 'piModel'
+  | 'piEffort'
   | 'modelLabel'
   | 'chatGptLabel'
   | 'promptPrefix'
@@ -614,6 +616,10 @@ export type TConfig = {
   providerId?: ProviderId;
   version?: string;
   modelDisplayLabel?: string;
+  piModelPicker?: boolean;
+  piDefaultModel?: string;
+  piDefaultEffort?: string;
+  piAllowedModels?: string;
   userProvide?: boolean | null;
   userProvideURL?: boolean | null;
   userProvideAccessKeyId?: boolean;

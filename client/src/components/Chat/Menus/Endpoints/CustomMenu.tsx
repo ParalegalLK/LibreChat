@@ -12,6 +12,8 @@ export interface CustomMenuProps extends Ariakit.MenuButtonProps<'div'> {
   comboboxLabel?: string;
   trigger?: Ariakit.MenuButtonProps['render'];
   defaultOpen?: boolean;
+  hideArrow?: boolean;
+  menuStyle?: React.CSSProperties;
 }
 
 export const CustomMenu = React.forwardRef<HTMLDivElement, CustomMenuProps>(function CustomMenu(
@@ -26,6 +28,8 @@ export const CustomMenu = React.forwardRef<HTMLDivElement, CustomMenuProps>(func
     comboboxLabel,
     trigger,
     defaultOpen,
+    hideArrow = false,
+    menuStyle,
     ...props
   },
   ref,
@@ -62,10 +66,11 @@ export const CustomMenu = React.forwardRef<HTMLDivElement, CustomMenuProps>(func
         )}
         render={parent ? <CustomMenuItem render={trigger} /> : trigger}
       >
-        <span className="flex-1">{label}</span>
-        <Ariakit.MenuButtonArrow className="stroke-1 text-base opacity-75" />
+        <span className={hideArrow ? 'flex flex-1 items-center justify-center' : 'flex-1'}>{label}</span>
+        {!hideArrow && <Ariakit.MenuButtonArrow className="stroke-1 text-base opacity-75" />}
       </Ariakit.MenuButton>
       <Ariakit.Menu
+        style={menuStyle}
         open={isOpen}
         portal
         overlap

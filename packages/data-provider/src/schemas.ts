@@ -1136,6 +1136,8 @@ export const tConversationSchema = z.object({
   modelLabel: z.string().nullable().optional(),
   userLabel: z.string().optional(),
   model: z.string().nullable().optional(),
+  piModel: z.string().nullable().optional(),
+  piEffort: z.string().nullable().optional(),
   promptPrefix: z.string().nullable().optional(),
   temperature: z.number().nullable().optional(),
   topP: z.number().optional(),
@@ -1625,6 +1627,8 @@ export const agentsSchema = agentsBaseSchema
 export const openAIBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
   model: true,
+  piModel: true,
+  piEffort: true,
   modelLabel: true,
   chatGptLabel: true,
   promptPrefix: true,

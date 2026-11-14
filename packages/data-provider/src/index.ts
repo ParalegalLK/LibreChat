@@ -60,6 +60,8 @@ import * as dataService from './data-service';
 export * from './providers';
 /* icon sanitization policy */
 export * from './svg';
+/* Pi model picker: allowed models and thinking levels */
+export * from './pi-model-policy';
 /* general helpers */
 export * from './utils';
 export * from './actions';

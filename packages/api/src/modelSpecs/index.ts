@@ -31,8 +31,10 @@ export type PrivateModelSpecPresetField = (typeof PRIVATE_MODEL_SPEC_PRESET_FIEL
 export type ModelSpecParsedBody = Partial<TConversation | TPreset | TModelSpecPreset> &
   Record<string, unknown>;
 
-export const ENFORCED_MODEL_SPEC_REQUEST_FIELDS: readonly ['chatProjectId'] = [
+export const ENFORCED_MODEL_SPEC_REQUEST_FIELDS: readonly ['chatProjectId', 'piModel', 'piEffort'] = [
   'chatProjectId',
+  'piModel',
+  'piEffort',
 ] as const satisfies readonly (keyof ModelSpecParsedBody)[];
 
 export type ApplyModelSpecPresetParams = {
