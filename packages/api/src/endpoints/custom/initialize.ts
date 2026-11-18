@@ -182,6 +182,7 @@ export async function initializeCustom({
   db,
 }: BaseInitializeParams): Promise<InitializeResultBase> {
   const appConfig = req.config;
+  const requestBody = req.body;
   const { key: expiresAt } = req.body;
 
   const endpointConfig = getCustomEndpointConfig({
